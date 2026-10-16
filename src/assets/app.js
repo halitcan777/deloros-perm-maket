@@ -20,20 +20,51 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') $$('.modal.open').forEach(function (m) { m.classList.remove('open'); }); });
   $$('[data-pay]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); if (mnav) mnav.classList.remove('open'); document.body.style.overflow = ''; openM('pay'); }); });
 
-  // слайдеры: прокрутка ленты на ширину видимой части
+  // слайдеры: стрелки листают по одной карточке, ленту можно тянуть мышью, стрелки прячутся, если всё видно
   $$('[data-slider]').forEach(function (s) {
     var t = $('.track', s);
+    var unit = function () {
+      var c = t.children[0], c2 = t.children[1];
+      return c ? (c2 ? c2.offsetLeft - c.offsetLeft : c.offsetWidth) : t.clientWidth;
+    };
     var step = function (d) {
       var max = t.scrollWidth - t.clientWidth;
       if (d > 0 && t.scrollLeft >= max - 4) t.scrollTo({ left: 0 });
       else if (d < 0 && t.scrollLeft <= 4) t.scrollTo({ left: max });
-      else t.scrollBy({ left: d * t.clientWidth });
+      else t.scrollBy({ left: d * unit() });
     };
     var p = $('[data-prev]', s), n = $('[data-next]', s);
-    if (p) p.addEventListener('click', function () { step(-1); });
-    if (n) n.addEventListener('click', function () { step(1); });
-    var auto = +s.getAttribute('data-auto');
-    if (auto) { var tm = setInterval(function () { step(1); }, auto); s.addEventListener('pointerdown', function () { clearInterval(tm); }); }
+    if (p) p.addEventListener('click', function () { step(-1); stop(); });
+    if (n) n.addEventListener('click', function () { step(1); stop(); });
+    var fit = function () { s.classList.toggle('fits', t.scrollWidth - t.clientWidth < 4); };
+    fit(); window.addEventListener('resize', fit); window.addEventListener('load', fit);
+    var auto = +s.getAttribute('data-auto'), tm = null;
+    var stop = function () { if (tm) { clearInterval(tm); tm = null; } };
+    if (auto) {
+      tm = setInterval(function () { if (!s.matches(':hover')) step(1); }, auto);
+    }
+    // перетаскивание мышью (на телефоне лента листается пальцем сама)
+    var down = false, x0 = 0, l0 = 0, moved = false;
+    t.addEventListener('pointerdown', function (e) {
+      if (e.pointerType !== 'mouse' || e.button !== 0) return;
+      down = true; moved = false; x0 = e.clientX; l0 = t.scrollLeft; stop();
+    });
+    window.addEventListener('pointermove', function (e) {
+      if (!down) return;
+      var dx = e.clientX - x0;
+      if (Math.abs(dx) > 5 && !moved) { moved = true; t.classList.add('drag'); }
+      if (moved) t.scrollLeft = l0 - dx;
+    });
+    window.addEventListener('pointerup', function () {
+      if (!down) return;
+      down = false;
+      if (moved) {
+        t.classList.remove('drag');
+        var u = unit(); t.scrollTo({ left: Math.round(t.scrollLeft / u) * u });
+      }
+    });
+    t.addEventListener('click', function (e) { if (moved) { e.preventDefault(); e.stopPropagation(); moved = false; } }, true);
+    t.addEventListener('dragstart', function (e) { e.preventDefault(); });
   });
 
   // главная новость: картинка + заголовок + точки
@@ -58,6 +89,15 @@
       });
     });
   });
+
+  // контакты: тема из плитки на главной (?topic=…) — выбираем и прокручиваем к форме
+  var tp = $('[data-topic]'), q = location.search.match(/[?&]topic=(\w+)/);
+  if (tp && q && $('option[value="' + q[1] + '"]', tp)) {
+    tp.value = q[1];
+    var to = location.search.match(/[?&]to=([^&]+)/), ta = $('textarea[name=msg]');
+    if (to && ta) ta.value = 'Хочу предложить сотрудничество: ' + decodeURIComponent(to[1].replace(/\+/g, ' ')) + '\n\n';
+    setTimeout(function () { $('#msg').scrollIntoView({ block: 'start' }); }, 50);
+  }
 
   // лица: поиск по ФИО и алфавит
   $$('[data-pfind]').forEach(function (w) {
