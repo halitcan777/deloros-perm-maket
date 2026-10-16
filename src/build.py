@@ -1,7 +1,9 @@
 """Сборка макета сайта Пермского отделения «Деловой России» из data/*.json → site/.
-Запуск:  python3 src/build.py            (ссылки от корня, для локального просмотра через http.server)
-         BASE=/deloros-perm python3 src/build.py   (для GitHub Pages)"""
-import os, re, json, html, shutil, hashlib, datetime, sys
+Схема страниц как на deloros.ru: шапка в две строки, голубая полоса с крошками, контент + правая колонка
+с виджетами, партнеры и синий подвал на каждой странице. Тексты только с deloros-perm.ru, код свой.
+Запуск:  python3 src/build.py                                   (site/, ссылки от корня)
+         OUT=docs BASE=/deloros-perm-maket python3 src/build.py  (GitHub Pages)"""
+import os, re, json, html, shutil, hashlib, datetime
 from urllib.parse import urlparse, unquote
 from concurrent.futures import ProcessPoolExecutor
 
@@ -19,367 +21,33 @@ VER = datetime.datetime.now().strftime('%m%d%H%M')
 PHONE, PHONE_HREF = '+7 (342) 256-35-05', 'tel:+73422563505'
 EMAIL = 'welcome@deloros59.ru'
 ADDR = '614007, Пермь, ул. Революции, 20, офис 406, БЦ «Бонус»'
-ADDR_SHORT = 'Пермь, ул. Революции, 20, офис 406'
-HOURS = 'Пн–пт 9:00–18:00'
 VK, TG, RUTUBE = 'https://vk.com/deloros59', 'https://t.me/deloros59', 'https://rutube.ru/channel/56421523/'
 PAY_CKASSA = 'https://ckassa.ru/payment/#!search_provider/pt_search/111-15131-1/pay'
 PAY_SBER = 'https://securepayments.sberbank.ru/shortlink/2KYMlQZt'
 BOOK = 'https://book.deloros59.ru/'
-CUTOFF_NEWS = os.environ.get('NEWS_FROM', '2025-10-01')   # с какой даты новости получают свою страницу в макете
-CUTOFF_EVENTS = os.environ.get('EVENTS_FROM', '2025-09-01')
-PRIORITY_PROJECTS = ['139', '156', '155', '162', '158', '154']
+DOC_JOIN = ORIG + '/upload/Вступление в ДР Пермский край вер 2.0 от 13.01.2023.docx'
+DOC_POL = ORIG + '/upload/Положение о членстве в ПК РО ООО Деловая Россия от 27.01.2025 г..pdf'
+DOC_USTAV = ORIG + '/upload/Устав ПК РО Деловая Россия вер. 1.0 от 03.09.2019г..pdf'
+NEWS_FROM = os.environ.get('NEWS_FROM', '2025-10-01')    # с какой даты у новости своя страница в макете
+EVENTS_FROM = os.environ.get('EVENTS_FROM', '2025-09-01')
+PRIORITY = ['139', '156', '155', '162', '158', '154']
+CATS = {'regional-office': 'Новости отделения', 'partners': 'Новости партнеров', 'events': 'Анонсы и итоги'}
 
 J = lambda n: json.load(open(os.path.join(DATA, n), encoding='utf-8'))
 esc = lambda s: html.escape(s or '', quote=True)
 L = lambda path: P + path
-
-MONTHS_G = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
-MONTHS_N = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
+MG = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
 
 
 def dfmt(iso, year=True):
     if not iso:
         return ''
     y, m, d = iso.split('-')
-    return f'{int(d)} {MONTHS_G[int(m) - 1]}' + (f' {y}' if year else '')
+    return f'{int(d)} {MG[int(m) - 1]}' + (f' {y}' if year else '')
 
 
-# ---------------- картинки ----------------
-JOBS = {}
-
-
-def mirror_file(url):
-    p = unquote(urlparse(url).path)
-    return os.path.join(MIR, p.lstrip('/'))
-
-
-def img(url, w=800):
-    """Регистрирует перевод картинки в WebP нужной ширины, возвращает адрес на сайте."""
-    if not url:
-        return ''
-    if url.startswith('/'):
-        url = ORIG + url
-    key = hashlib.md5(f'{url}|{w}'.encode()).hexdigest()[:16]
-    name = f'{key}.webp'
-    JOBS[name] = (url, w)
-    return L(f'/img/{name}')
-
-
-def _convert(args):
-    name, url, w = args
-    from PIL import Image, ImageOps
-    import requests
-    dst_cache = os.path.join(IMGCACHE, name)
-    dst = os.path.join(OUT, 'img', name)
-    if not os.path.exists(dst_cache):
-        src = mirror_file(url)
-        if not os.path.exists(src) or os.path.getsize(src) == 0:
-            try:
-                r = requests.get(url, timeout=40, headers={'User-Agent': 'Mozilla/5.0 DAPI-mirror/1.0'})
-                if r.status_code != 200 or not r.content:
-                    return name, 'http %s' % r.status_code
-                os.makedirs(os.path.dirname(src), exist_ok=True)
-                open(src, 'wb').write(r.content)
-            except Exception as e:
-                return name, str(e)[:80]
-        try:
-            im = Image.open(src)
-            im = ImageOps.exif_transpose(im)
-            if im.mode not in ('RGB', 'RGBA'):
-                im = im.convert('RGBA' if 'transparency' in im.info or im.mode in ('LA', 'P') else 'RGB')
-            if im.width > w:
-                im = im.resize((w, round(im.height * w / im.width)), Image.LANCZOS)
-            im.save(dst_cache, 'WEBP', quality=76, method=4)
-        except Exception as e:
-            return name, 'img ' + str(e)[:80]
-    shutil.copyfile(dst_cache, dst)
-    return name, None
-
-
-def run_images():
-    os.makedirs(IMGCACHE, exist_ok=True)
-    os.makedirs(os.path.join(OUT, 'img'), exist_ok=True)
-    jobs = [(n, u, w) for n, (u, w) in JOBS.items()]
-    bad = []
-    with ProcessPoolExecutor(max_workers=8) as ex:
-        for i, (n, err) in enumerate(ex.map(_convert, jobs, chunksize=16)):
-            if err:
-                bad.append((n, err))
-    print(f'картинки: {len(jobs)}, не вышло {len(bad)}')
-    return {n for n, _ in bad}
-
-
-# ---------------- иконки (Lucide) ----------------
-ICONS = {
-    'users': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
-    'landmark': '<line x1="3" x2="21" y1="22" y2="22"/><line x1="6" x2="6" y1="18" y2="11"/><line x1="10" x2="10" y1="18" y2="11"/><line x1="14" x2="14" y1="18" y2="11"/><line x1="18" x2="18" y1="18" y2="11"/><polygon points="12 2 20 7 4 7"/>',
-    'handshake': '<path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/>',
-    'banknote': '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
-    'megaphone': '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
-    'globe': '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
-    'shield': '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
-    'calendar': '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
-    'file': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
-    'briefcase': '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
-    'graduation': '<path d="M21.42 10.92a1 1 0 0 0-.02-1.84L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.83l8.57 3.91a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
-    'plane': '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
-    'menu': '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>',
-    'phone': '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
-    'factory': '<path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/>',
-    'cpu': '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
-    'building': '<rect width="16" height="20" x="4" y="2" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/>',
-    'trending': '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
-}
-
-
-def icon(n, size=24):
-    return f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ICONS[n]}</svg>'
-
-
-# ---------------- ссылки внутри старого контента ----------------
-GENERATED = set()
-LINK_MAP = {  # исправление битых и старых адресов
-    '/services/obshchie-uslugi/finansovyy-ekonomicheskiy-audit/': '/services/common-services/finansovyy-ekonomicheskiy-audit/',
-    '/organization/kak-vstupit/': '/organization/how-to-join/',
-    '/meropriyatiya/': '/events/',
-    '/organization/': '/organization/about/',
-}
-
-
-def fix_links(h):
-    def rep_a(m):
-        u = m.group(1)
-        pu = urlparse(u)
-        host = pu.netloc.lower().removeprefix('www.')
-        if host in ('deloros-perm.ru', 'deloros59.ru'):
-            path = unquote(pu.path) or '/'
-            path = LINK_MAP.get(path, path)
-            if path in GENERATED or (path + '/') in GENERATED:
-                return f'href="{esc(L(path))}"'
-            return f'href="{esc(ORIG + pu.path)}" target="_blank" rel="noopener"'
-        return f'href="{esc(u)}" target="_blank" rel="noopener"'
-    h = re.sub(r'href="([^"]+)"', rep_a, h)
-
-    def rep_img(m):
-        u = html.unescape(m.group(1))
-        return f'src="{img(u, 1200)}" loading="lazy"'
-    h = re.sub(r'src="(https?://(?:www\.)?deloros-perm\.ru/upload/[^"]+)"', rep_img, h)
-    h = re.sub(r'<iframe src="([^"]+)"', r'<iframe loading="lazy" src="\1" allowfullscreen', h)
-    return h
-
-
-def clean_body(h):
-    """Мусор шаблона, теги, пустые ссылки и личные почты из старого контента."""
-    h = re.sub(r'<p>\s*(Подписаться на\s*(<br/>)?\s*рассылку|Будьте в курсе последних новостей отрасли|Подписаться|Назад к списку|Поделиться)\s*</p>', '', h)
-    h = re.sub(r'<ul>(\s*<li>\s*<a href="[^"]*search_tags[^"]*">[^<]*</a>\s*</li>)+\s*</ul>', '', h)
-    h = re.sub(r'<a href="[^"]*">\s*</a>', '', h)
-    h = re.sub(r'E-mail\s+[\w.+-]+@[\w-]+\.[\w.]+', '', h)
-    h = re.sub(r'<a href="mailto:[^"]+"[^>]*>.*?</a>', '', h)
-    h = re.sub(r'<p>\s*(<br/?>\s*)*</p>', '', h)
-    return h
-
-
-def split_team(h):
-    """Хвост страницы с карточками участников → список ссылок на участников."""
-    m = re.search(r'<p>\s*<a href="[^"]*/organization/team/members/[^"]+">\s*<img', h)
-    if not m:
-        return h, []
-    tail = h[m.start():]
-    slugs = list(dict.fromkeys(re.findall(r'/organization/team/members/([^/"]+)/', tail)))
-    return h[:m.start()], slugs
-
-
-def tidy(h):
-    """Типографика и опечатки исходника."""
-    fixes = {'орбщественной': 'общественной', 'програма': 'программа', 'Финансовый-экономический': 'Финансово-экономический',
-             'о изменении': 'об изменении', 'Пермском краю': 'Пермскому краю'}
-    for a, b in fixes.items():
-        h = h.replace(a, b)
-    return h
-
-
-# ---------------- каркас страницы ----------------
-NAV = None
-
-
-def build_nav(projects):
-    pr = {p['id']: p for p in projects}
-    return [
-        ('Сообщество', '/organization/about/', [
-            ('О «Деловой России»', '/organization/about/'),
-            ('Отделение в Пермском крае', '/organization/perm-region/'),
-            ('Комитеты', '/commissions/'),
-            ('Клубы', '/clubs/'),
-            ('Советы и рабочие группы', '/boards/'),
-            ('Эксперты', '/organization/experts/'),
-            ('Партнеры', '/organization/partners/'),
-            ('Документы', '/organization/docs/'),
-        ]),
-        ('Участники', '/organization/team/', None),
-        ('Возможности', '/services/', [
-            ('Пакеты участия', '/services/package-of-documents/'),
-            ('Финансы и инвестиции', '/services/investments-and-loans/'),
-            ('PR-пакеты', '/services/pr-package-of-documents/'),
-            ('Общие услуги', '/services/common-services/'),
-            ('Безопасность бизнеса', '/services/business-security/'),
-            ('Управление командировками', '/services/upravlenie-komandirovkami/'),
-            ('Обучение', '/services/obrazovatelnye-programmy-korporativnogo-universiteta-sberbanka/'),
-        ]),
-        ('Проекты', '/projects/', [(pr[i]['title'], f'/projects/{i}/') for i in PRIORITY_PROJECTS if i in pr] + [('Все проекты', '/projects/')]),
-        ('Мероприятия', '/events/', None),
-        ('Новости', '/news/', None),
-        ('Контакты', '/contacts/', None),
-    ]
-
-
-def header(active):
-    items = []
-    for title, href, sub in NAV:
-        on = ' class="on"' if active == href else ''
-        dd = ''
-        if sub:
-            lis = ''.join(f'<li><a href="{L(h)}"{" class=all" if t == "Все проекты" else ""}>{esc(t)}</a></li>' for t, h in sub)
-            dd = f'<ul class="dd">{lis}</ul>'
-        items.append(f'<li{on}><a href="{L(href)}">{esc(title)}</a>{dd}</li>')
-    mob = []
-    for title, href, sub in NAV:
-        mob.append(f'<a href="{L(href)}">{esc(title)}</a>')
-        if sub:
-            mob.append('<div class="sub">' + ''.join(f'<a href="{L(h)}">{esc(t)}</a>' for t, h in sub if t != 'Все проекты') + '</div>')
-    return f'''<div class="proto">Макет нового сайта · DAPI · содержание взято с deloros-perm.ru на {dfmt(TODAY)}</div>
-<div class="top"><div class="wrap">
-  <span>{ADDR_SHORT}</span><span>{HOURS}</span><a href="mailto:{EMAIL}">{EMAIL}</a>
-  <div class="soc"><a href="#pay" data-pay>Оплатить взнос</a><a href="{TG}" target="_blank" rel="noopener">Telegram</a><a href="{VK}" target="_blank" rel="noopener">ВКонтакте</a></div>
-</div></div>
-<header class="hdr"><div class="wrap">
-  <a class="logo" href="{L('/')}" aria-label="Деловая Россия, Пермский край, на главную"><img src="{L('/assets/logo.png')}" alt="Деловая Россия. Пермский край" width="163" height="48"></a>
-  <nav aria-label="Основное меню"><ul class="nav">{''.join(items)}</ul></nav>
-  <div class="act"><a class="phone" href="{PHONE_HREF}">{PHONE}</a><a class="btn btn-primary btn-sm" href="{L('/organization/how-to-join/')}#zayavka">Вступить</a>
-  <button class="burger" aria-label="Меню" aria-expanded="false" data-burger>{icon('menu')}</button></div>
-</div></header>
-<div class="mnav" data-mnav>{''.join(mob)}<a class="btn btn-primary" href="{L('/organization/how-to-join/')}#zayavka">Обсудить вступление</a><a href="{PHONE_HREF}">{PHONE}</a><a href="#pay" data-pay>Оплатить взнос</a></div>'''
-
-
-def footer():
-    col = lambda t, links: f'<div><div class="h">{t}</div><ul>' + ''.join(f'<li><a href="{L(h) if h.startswith("/") else h}">{esc(x)}</a></li>' for x, h in links) + '</ul></div>'
-    return f'''<footer class="ftr"><div class="wrap">
-<div class="cols">
-  <div><a class="logo" href="{L('/')}"><img src="{L('/assets/logo.png')}" alt="Деловая Россия. Пермский край" width="163" height="48"></a>
-    <div class="ct"><a href="{PHONE_HREF}"><b>{PHONE}</b></a><a href="mailto:{EMAIL}">{EMAIL}</a><span>{ADDR}</span><span>{HOURS}</span></div></div>
-  {col('Об отделении', [('О «Деловой России»', '/organization/about/'), ('Отделение в Пермском крае', '/organization/perm-region/'), ('Участники', '/organization/team/'), ('Комитеты', '/commissions/'), ('Клубы', '/clubs/'), ('Советы и рабочие группы', '/boards/'), ('Партнеры', '/organization/partners/')])}
-  {col('Участие', [('Вступить', '/organization/how-to-join/'), ('Пакеты участия', '/services/package-of-documents/'), ('Возможности', '/services/'), ('Проекты', '/projects/'), ('Мероприятия', '/events/')])}
-  {col('Информация', [('Новости', '/news/'), ('Документы', '/organization/docs/'), ('Реквизиты', '/organization/requisites/'), ('Контакты', '/contacts/'), ('Политика конфиденциальности', '/privacy/')])}
-  {col('Мы в сети', [('Telegram', TG), ('ВКонтакте', VK), ('Rutube', RUTUBE), ('Книга «Предприниматели и меценаты Прикамья»', BOOK)])}
-</div>
-<div class="bottom"><span>© 2004–{TODAY[:4]} Пермское краевое региональное отделение «Деловая Россия»</span><span>ИНН 5902990323 · ОГРН 1135900001742</span><a href="#pay" data-pay>Оплатить членский взнос</a></div>
-</div></footer>
-<div class="modal" id="pay" role="dialog" aria-modal="true" aria-labelledby="pay-h"><div class="box">
-  <button class="x" data-close aria-label="Закрыть">×</button>
-  <h3 id="pay-h">Оплата членского взноса</h3>
-  <p class="note" style="margin-top:8px">Взнос за год по вашему пакету участия. Пакет «Базовый» 100 000 ₽, «Премиум» 190 000 ₽. Если не уверены в сумме, позвоните в дирекцию {PHONE}.</p>
-  <div class="pay-opt">
-    <a href="{PAY_SBER}" target="_blank" rel="noopener"><span><b>Картой или через СБП</b><small>Платежная страница Сбербанка, сумму укажете на ней</small></span><span>Перейти</span></a>
-    <a href="{PAY_CKASSA}" target="_blank" rel="noopener"><span><b>Через «Центральную кассу»</b><small>Терминалы и онлайн-оплата, поставщик «Деловая Россия»</small></span><span>Перейти</span></a>
-  </div>
-  <p class="note">Для оплаты по счету от организации напишите на <a href="mailto:{EMAIL}">{EMAIL}</a>, реквизиты на странице <a href="{L('/organization/requisites/')}">Реквизиты</a>.</p>
-</div></div>'''
-
-
-def layout(path, title, body, desc='', active=None, og_img=None):
-    full = f'{title} · Деловая Россия, Пермский край' if path != '/' else 'Деловая Россия, Пермский край · сообщество предпринимателей Прикамья'
-    d = esc((desc or '')[:200])
-    doc = f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{esc(full)}</title><meta name="description" content="{d}"><meta name="robots" content="noindex,nofollow">
-<link rel="canonical" href="{ORIG}{esc(path)}"><meta property="og:title" content="{esc(title)}"><meta property="og:description" content="{d}">{f'<meta property="og:image" content="{og_img}">' if og_img else ''}
-<link rel="icon" href="{L('/assets/favicon.png')}"><link rel="preload" href="{L('/assets/fonts/onest-cyrillic-400.woff2')}" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="{L('/assets/site.css')}?v={VER}"></head><body>
-{header(active)}
-<main id="main">{body}</main>
-{footer()}
-<script src="{L('/assets/app.js')}?v={VER}" defer></script></body></html>'''
-    f = os.path.join(OUT, path.lstrip('/'), 'index.html') if path.endswith('/') else os.path.join(OUT, path.lstrip('/'))
-    os.makedirs(os.path.dirname(f), exist_ok=True)
-    open(f, 'w', encoding='utf-8').write(doc)
-
-
-def crumbs(*pairs):
-    out = [f'<a href="{L("/")}">Главная</a>']
-    for t, h in pairs:
-        out.append(f'<span><a href="{L(h)}">{esc(t)}</a></span>' if h else f'<span>{esc(t)}</span>')
-    return f'<div class="wrap crumbs">{"".join(out)}</div>'
-
-
-def page_head(title, sub='', meta=''):
-    return f'<div class="wrap page-h"><h1>{esc(title)}</h1>{f"<p class=sub>{sub}</p>" if sub else ""}{f"<div class=meta>{meta}</div>" if meta else ""}</div>'
-
-
-def side(items, cur):
-    return '<nav class="side" aria-label="Раздел">' + ''.join(
-        f'<div class="h">{esc(t)}</div>' if h is None else f'<a href="{L(h)}"{" class=on" if h == cur else ""}>{esc(t)}</a>' for t, h in items) + '</nav>'
-
-
-SIDE_COMMUNITY = [('Сообщество', None), ('О «Деловой России»', '/organization/about/'), ('Отделение в Пермском крае', '/organization/perm-region/'),
-                  ('Участники', '/organization/team/'), ('Комитеты', '/commissions/'), ('Клубы', '/clubs/'), ('Советы и рабочие группы', '/boards/'),
-                  ('Эксперты', '/organization/experts/'), ('Партнеры', '/organization/partners/'), ('Документы', '/organization/docs/'), ('Реквизиты', '/organization/requisites/')]
-
-
-def cta_join(title='Хотите участвовать?', text='Оставьте короткую заявку, исполнительный директор свяжется с вами и расскажет, как устроено участие.', interest=''):
-    q = f'?interest={esc(interest)}' if interest else ''
-    return f'<div class="aside-cta"><div><b>{esc(title)}</b><span>{esc(text)}</span></div><a class="btn btn-primary" href="{L("/organization/how-to-join/")}{q}#zayavka">Обсудить участие</a></div>'
-
-
-INTERESTS = ['Вступление в «Деловую Россию»', 'Участие в проекте', 'Участие в мероприятии', 'Работа в комитете', 'Партнерство', 'Сотрудничество с участником', 'Другое']
-
-
-def lead_form(title='Обсудить вступление', text='Короткая заявка ни к чему не обязывает. Исполнительный директор позвонит в течение двух рабочих дней, расскажет об условиях и пригласит на знакомство.', interest=''):
-    opts = ''.join(f'<option{" selected" if i == interest else ""}>{esc(i)}</option>' for i in INTERESTS)
-    return f'''<section class="sec" id="zayavka"><div class="wrap"><div class="lead-box" data-lead>
-<div><h2>{esc(title)}</h2><p style="margin-top:16px">{esc(text)}</p>
-<div class="contact">Удобнее позвонить? <a href="{PHONE_HREF}">{PHONE}</a><br>{HOURS}</div></div>
-<div>
-<form class="form" data-form novalidate>
-  <label>Имя и фамилия<input name="name" required autocomplete="name"></label>
-  <label>Телефон<input name="phone" type="tel" required autocomplete="tel" placeholder="+7"></label>
-  <label>Компания<input name="company" required autocomplete="organization"></label>
-  <label>Должность<input name="position" autocomplete="organization-title"></label>
-  <label class="full">Что вас интересует<select name="interest">{opts}</select></label>
-  <label class="full agree"><input type="checkbox" name="agree" required> <span>Согласен на обработку персональных данных по <a href="{L('/privacy/')}">политике конфиденциальности</a>. Данные хранятся в России.</span></label>
-  <input type="hidden" name="source" value="">
-  <button class="btn btn-white" type="submit">Отправить заявку</button>
-</form>
-<div class="done" role="status"><h3>Заявка принята</h3><p>Что будет дальше</p><ol>
-  <li>В течение двух рабочих дней позвонит исполнительный директор отделения.</li>
-  <li>Договоримся о встрече в офисе на Революции, 20 или на ближайшем открытом мероприятии.</li>
-  <li>Если решите вступать, пришлем пакет документов и расскажем о сроках.</li></ol></div>
-</div></div></div></section>'''
-
-
-# ---------------- данные ----------------
-def load():
-    news = [n for n in J('news.json') if n.get('title') and n.get('url', '').count('/') >= 6]
-    for n in news:
-        n['cat'] = n.get('cat') or urlparse(n['url']).path.split('/')[2]
-    events = J('events.json')
-    team = [p for p in J('team.json') if p.get('url') and '/members/' in p['url']]
-    sections = J('sections.json')
-    pages = J('pages.json')
-    projects = []
-    for p in sections['projects']:
-        pid = p['url'].rstrip('/').split('/')[-1]
-        if not pid.isdigit():
-            continue
-        p['id'] = pid
-        projects.append(p)
-    return news, events, team, sections, pages, projects
-
-
-def project_status(p):
-    years = [int(y) for y in re.findall(r'\b(20[12]\d)\b', p.get('body', '') + ' ' + p['title'])]
-    if int(p['id']) >= 149:
-        return 'active'
-    if years and max(years) >= 2025:
-        return 'active'
-    return 'archive'
+def dnum(iso):
+    return '.'.join(reversed(iso.split('-'))) if iso else ''
 
 
 def path_of(url):
@@ -390,504 +58,147 @@ def is_own(url):
     return urlparse(url).netloc.lower().removeprefix('www.') in ('deloros-perm.ru', 'deloros59.ru', '')
 
 
-# ---------------- страницы ----------------
-def card_news(n, local=True):
-    href = L(path_of(n['url'])) if local else n['url']
-    ext = '' if local else ' target="_blank" rel="noopener"'
-    ph = f'<div class="ph"><img src="{img(n.get("thumb") or (n.get("gallery") or [None])[0], 640)}" alt="" loading="lazy"></div>' if (n.get('thumb') or n.get('gallery')) else ''
-    return f'<a class="card" href="{esc(href)}"{ext}>{ph}<div class="in"><div class="date">{dfmt(n.get("date"))}</div><h3>{esc(n["title"])}</h3></div></a>'
+# ---------------- картинки → WebP ----------------
+JOBS = {}
 
 
-def ev_card(e):
-    tag = '<span class="tag closed">Для участников</span>' if e.get('closed') else '<span class="tag ok">Открытое</span>'
-    return f'<a class="ev" href="{L(path_of(e["url"]))}"><span class="d">{esc(e.get("date_text") or dfmt(e.get("date"), False))}</span><span class="t">{esc(e["title"])}</span>{tag}</a>'
+def img(url, w=800):
+    if not url:
+        return ''
+    if url.startswith('/'):
+        url = ORIG + url
+    name = hashlib.md5(f'{url}|{w}'.encode()).hexdigest()[:16] + '.webp'
+    JOBS[name] = (url, w)
+    return L(f'/img/{name}')
 
 
-def build_home(news, events, team, projects, stats):
-    up = [e for e in events if e['upcoming']]
-    up.sort(key=lambda e: e.get('date') or '9999')
-    first_open = next((e for e in up if not e['closed']), up[0] if up else None)
-    hero_ev = ''
-    if first_open:
-        g = first_open.get('gallery') or []
-        ph = f'<img src="{img(g[0], 960)}" alt="">' if g else ''
-        hero_ev = f'''<aside class="hero-ev">{ph}<div class="in"><div class="lbl">Ближайшее событие</div><h3>{esc(first_open['title'])}</h3>
-<div class="meta">{esc(first_open.get('date_text') or '')} · {'только для участников' if first_open['closed'] else 'открытое мероприятие'}</div>
-{f'<a class="btn btn-line btn-sm" href="{L("/organization/how-to-join/")}">Как попасть на закрытые встречи</a>' if first_open['closed'] else f'<a class="btn btn-primary btn-sm" href="{L(path_of(first_open["url"]))}#zayavka">Зарегистрироваться</a>'}</div></aside>'''
-    leaders = [p for p in team if p.get('order', 999) <= 13][:8]
-    pr = {p['id']: p for p in projects}
-    prio = [pr[i] for i in PRIORITY_PROJECTS if i in pr]
-    up_html = ''.join(ev_card(e) for e in up[:4]) if up else ''
-    if not up:
-        up_html = f'<div class="empty"><div><b>Скоро появится новое мероприятие</b><span>Анонсы выходят за 2–3 недели. Подпишитесь на Telegram-канал, чтобы не пропустить.</span></div><a class="btn btn-line" href="{TG}">Telegram-канал</a></div>'
-    else:
-        up_html = f'<div class="ev-list">{up_html}</div>'
-    benefits = [
-        ('handshake', 'Деловые контакты', 'Собственники и первые лица компаний Прикамья в закрытых чатах, клубах и на встречах отделения.'),
-        ('landmark', 'Диалог с властью', 'Участие в советах и рабочих группах при краевых министерствах, прокуратуре, мэрии и уполномоченном по защите прав предпринимателей.'),
-        ('banknote', 'Финансирование', 'Консультации по льготным кредитам, грантам, субсидиям и структурированию инвестпроектов.'),
-        ('globe', 'Новые рынки', 'Бизнес-миссии, клуб экспортеров и выход на партнеров через федеральную сеть «Деловой России».'),
-        ('megaphone', 'Продвижение', 'Публикации о компании и интервью на ресурсах отделения, рекомендация участникам и партнерам.'),
-        ('shield', 'Защита бизнеса', 'Помощь при проверках, разбор налоговых рисков, защита от недобросовестных действий.'),
-    ]
-    who = [('Собственникам и директорам', 'среднего и крупного бизнеса, которым нужны связи, поддержка и голос в регионе'),
-           ('Промышленникам и строителям', 'комитеты по промышленности и строительству, «Альянс проверенных подрядчиков»'),
-           ('Экспортерам', 'клуб экспортеров, бизнес-миссии, контакты в других странах через сеть организации'),
-           ('Технологическим компаниям', 'клуб инноваторов, трансфер технологий, центр компетенций по НМА'),
-           ('Инвесторам', 'клуб частного инвестора, гид инвестора, реестр проектов и идей'),
-           ('Экспертам и консультантам', 'экспертные советы, выступления на бизнес-завтраках, участие в комитетах')]
-    news_html = ''.join(card_news(n) for n in news[:8])
-    facts = ''.join(f'<div class="fact"><b>{b}</b><span>{s}</span><small>{sm}</small></div>' for b, s, sm in stats['hero'])
-    body = f'''
-<section class="hero"><div class="wrap">
- <div><h1>Сообщество предпринимателей Прикамья с 2004 года</h1>
- <p class="lead">Пермское отделение «Деловой России» объединяет собственников и руководителей компаний края. Помогаем находить партнеров, получать финансирование, выходить на новые рынки и доносить позицию бизнеса до власти.</p>
- <div class="ctas"><a class="btn btn-primary" href="{L('/organization/how-to-join/')}#zayavka">Обсудить вступление</a><a class="btn btn-line" href="{L('/organization/team/')}">Посмотреть участников</a></div>
- <div class="facts">{facts}</div></div>
- {hero_ev}
-</div></section>
-
-<section class="sec tight"><div class="wrap">
- <div class="sec-h"><h2>Ближайшие мероприятия</h2><a class="link-more" href="{L('/events/')}">Все мероприятия</a></div>
- {up_html}
-</div></section>
-
-<section class="sec soft"><div class="wrap">
- <div class="sec-h"><h2>Что получает участник</h2><p>Возможности пакетов «Базовый» и «Премиум». Полный состав и сравнение на странице вступления.</p></div>
- <div class="grid g3">{''.join(f'<div class="benefit"><div class="ic">{icon(i)}</div><h3>{t}</h3><p>{d}</p></div>' for i, t, d in benefits)}</div>
- <div style="margin-top:32px"><a class="btn btn-primary" href="{L('/organization/how-to-join/')}">Условия участия</a></div>
-</div></section>
-
-<section class="sec"><div class="wrap">
- <div class="sec-h"><h2>Кому подходит сообщество</h2></div>
- <ul class="who">{''.join(f'<li><b>{t}</b><span>{d}</span></li>' for t, d in who)}</ul>
-</div></section>
-
-<section class="sec soft"><div class="wrap">
- <div class="sec-h"><h2>Отделение в цифрах</h2><p>Посчитано по материалам сайта, период указан у каждой цифры. Перед запуском дирекция сверяет данные.</p></div>
- <div class="grid g4">{''.join(f'<div class="benefit"><b style="font-size:36px;font-weight:600;line-height:1">{b}</b><h3>{t}</h3><p>{d}</p></div>' for b, t, d in stats['scale'])}</div>
-</div></section>
-
-<section class="sec"><div class="wrap">
- <div class="sec-h"><h2>Проекты отделения</h2><a class="link-more" href="{L('/projects/')}">Все проекты</a></div>
- <div class="grid g3">{''.join(card_project(p) for p in prio)}</div>
-</div></section>
-
-<section class="sec soft"><div class="wrap">
- <div class="sec-h"><h2>Новости</h2><a class="link-more" href="{L('/news/')}">Все новости</a></div>
- <div class="grid g4">{news_html}</div>
-</div></section>
-
-<section class="sec"><div class="wrap">
- <div class="sec-h"><h2>Руководство отделения</h2><a class="link-more" href="{L('/organization/team/')}">Все участники</a></div>
- <div class="people">{''.join(person_card(p) for p in leaders)}</div>
-</div></section>
-
-<section class="sec soft"><div class="wrap">
- <div class="sec-h"><h2>Как вступить</h2><a class="link-more" href="{L('/organization/how-to-join/')}">Подробно о вступлении</a></div>
- {steps_html()}
-</div></section>
-{lead_form()}'''
-    layout('/', 'Главная', body, desc='Пермское отделение «Деловой России» с 2004 года объединяет собственников и руководителей компаний Прикамья. Вступление, мероприятия, проекты, участники.', active='/')
+def _convert(args):
+    name, url, w = args
+    from PIL import Image, ImageOps
+    import requests
+    cache = os.path.join(IMGCACHE, name)
+    if not os.path.exists(cache):
+        src = os.path.join(MIR, unquote(urlparse(url).path).lstrip('/'))
+        if not os.path.exists(src) or os.path.getsize(src) == 0:
+            try:
+                r = requests.get(url, timeout=40, headers={'User-Agent': 'Mozilla/5.0 DAPI-mirror/1.0'})
+                if r.status_code != 200 or not r.content:
+                    return name, f'http {r.status_code}'
+                os.makedirs(os.path.dirname(src), exist_ok=True)
+                open(src, 'wb').write(r.content)
+            except Exception as e:
+                return name, str(e)[:80]
+        try:
+            im = ImageOps.exif_transpose(Image.open(src))
+            if im.mode not in ('RGB', 'RGBA'):
+                im = im.convert('RGBA' if 'transparency' in im.info or im.mode in ('LA', 'P') else 'RGB')
+            if im.width > w:
+                im = im.resize((w, round(im.height * w / im.width)), Image.LANCZOS)
+            im.save(cache, 'WEBP', quality=76, method=4)
+        except Exception as e:
+            return name, 'img ' + str(e)[:80]
+    shutil.copyfile(cache, os.path.join(OUT, 'img', name))
+    return name, None
 
 
-def steps_html():
-    st = [('Короткая заявка', 'Имя, компания и телефон на сайте или по звонку'),
-          ('Разговор', 'Исполнительный директор расскажет об условиях и ответит на вопросы'),
-          ('Знакомство', 'Встреча в офисе или на открытом мероприятии отделения'),
-          ('Документы', 'Заявление, анкета, согласие и оплата вступительного взноса'),
-          ('Решение совета', 'Региональный совет утверждает прием, вы получаете сертификат и значок')]
-    return '<ol class="steps">' + ''.join(f'<li><b>{a}</b><span>{b}</span></li>' for a, b in st) + '</ol>'
+def run_images():
+    os.makedirs(IMGCACHE, exist_ok=True)
+    os.makedirs(os.path.join(OUT, 'img'), exist_ok=True)
+    bad = []
+    with ProcessPoolExecutor(max_workers=8) as ex:
+        for n, err in ex.map(_convert, [(n, u, w) for n, (u, w) in JOBS.items()], chunksize=16):
+            if err:
+                bad.append(n)
+    print(f'картинки: {len(JOBS)}, не вышло {len(bad)}')
+    return set(bad)
 
 
-def card_project(p):
-    st = p.get('status') == 'active'
-    tag = '<span class="tag ok">Действует</span>' if st else '<span class="tag arch">Архив</span>'
-    ph = f'<div class="ph"><img src="{img(p.get("img"), 640)}" alt="" loading="lazy"></div>' if p.get('img') else ''
-    lead = p.get('lead', '')
-    return f'<a class="card" href="{L("/projects/" + p["id"] + "/")}">{ph}<div class="in"><h3>{esc(p["title"].strip())}</h3>{f"<p>{esc(lead)}</p>" if lead else ""}<div class="foot">{tag}</div></div></a>'
+# ---------------- иконки (Lucide) ----------------
+ICONS = {
+    'userplus': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/>',
+    'card': '<rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/>',
+    'book': '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+    'search': '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    'menu': '<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/>',
+    'right': '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+    'chl': '<path d="m15 18-6-6 6-6"/>', 'chr': '<path d="m9 18 6-6-6-6"/>',
+    'send': '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
+    'play': '<polygon points="6 3 20 12 6 21 6 3"/>',
+    'file': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8M16 13H8M16 17H8"/>',
+    'users': '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    'banknote': '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
+    'megaphone': '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+    'shield': '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+    'briefcase': '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
+    'graduation': '<path d="M21.42 10.92a1 1 0 0 0-.02-1.84L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.83l8.57 3.91a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
+    'plane': '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
+    'factory': '<path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/>',
+    'rocket': '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+    'coffee': '<path d="M10 2v2M14 2v2M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/><path d="M6 2v2"/>',
+    'scale': '<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10M12 3v18M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>',
+}
 
 
-def person_card(p, data=False):
-    attrs = ''
-    if data:
-        grp = 'lead' if p.get('order', 999) <= 7 else ('council' if 'совет' in (p.get('role') or '').lower() else 'member')
-        attrs = f' data-grp="{grp}" data-q="{esc((p["name"] + " " + (p.get("role") or "") + " " + " ".join(p.get("tags") or [])).lower())}"'
-    ph = p.get('photo') or p.get('photo_big')
-    pic = f'<img src="{img(ph, 480)}" alt="{esc(p["name"])}" loading="lazy">' if ph else ''
-    return f'<a class="person" href="{L(path_of(p["url"]))}"{attrs}><div class="ph">{pic}</div><div class="in"><b>{esc(p["name"])}</b><span>{esc(p.get("role") or "Член «Деловой России»")}</span></div></a>'
+def icon(n):
+    return f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{ICONS[n]}</svg>'
+
+
+# ---------------- старый контент: ссылки, мусор, опечатки ----------------
+GENERATED = set()
+LINK_MAP = {'/services/obshchie-uslugi/finansovyy-ekonomicheskiy-audit/': '/services/common-services/finansovyy-ekonomicheskiy-audit/',
+            '/organization/kak-vstupit/': '/organization/how-to-join/', '/meropriyatiya/': '/events/',
+            '/organization/': '/organization/about/', '/include/licenses_detail.php': '/privacy/'}
+
+
+def fix_links(h):
+    def rep_a(m):
+        u = m.group(1)
+        pu = urlparse(u)
+        if pu.netloc.lower().removeprefix('www.') in ('deloros-perm.ru', 'deloros59.ru'):
+            path = LINK_MAP.get(unquote(pu.path) or '/', unquote(pu.path) or '/')
+            if path in GENERATED:
+                return f'href="{esc(L(path))}"'
+            return f'href="{esc(ORIG + pu.path)}" target="_blank" rel="noopener"'
+        return f'href="{esc(u)}" target="_blank" rel="noopener"'
+    h = re.sub(r'href="([^"]+)"', rep_a, h)
+    h = re.sub(r'src="(https?://(?:www\.)?deloros-perm\.ru/upload/[^"]+)"', lambda m: f'src="{img(html.unescape(m.group(1)), 1200)}" loading="lazy"', h)
+    return re.sub(r'<iframe src="([^"]+)"', r'<iframe loading="lazy" src="\1" allowfullscreen', h)
+
+
+def clean_body(h):
+    # на живом сайте в комитетах выводится служебный дамп Битрикса «Array ( [0] => …» вместо кнопки
+    h = re.sub(r'<p>(?:(?!</p>).)*=&gt; Array(?:(?!</p>).)*</p>|<p>(?:(?!</p>).)*=> Array(?:(?!</p>).)*</p>', '', h, flags=re.S)
+    h = re.sub(r'(Вступить в комитет\s*)?Array\s*\([^<]*', '', h)
+    h = re.sub(r'<p>\s*(Подписаться на\s*(<br/>)?\s*рассылку|Будьте в курсе последних новостей отрасли|Подписаться|Назад к списку|Поделиться|Описание)\s*</p>', '', h)
+    h = re.sub(r'^<p>\s*Описание\s+', '<p>', h)
+    h = re.sub(r'<ul>(\s*<li>\s*<a href="[^"]*search_tags[^"]*">[^<]*</a>\s*</li>)+\s*</ul>', '', h)
+    h = re.sub(r'<a href="[^"]*">\s*</a>', '', h)
+    h = re.sub(r'E-mail\s+[\w.+-]+@[\w-]+\.[\w.]+', '', h)
+    h = re.sub(r'<a href="mailto:[^"]+"[^>]*>.*?</a>', '', h)
+    return re.sub(r'<p>\s*(<br/?>\s*)*</p>', '', h)
+
+
+def split_team(h):
+    """Хвост страницы с карточками участников → (текст без хвоста, slug'и участников)."""
+    m = re.search(r'<p>\s*<a href="[^"]*/organization/team/members/[^"]+">\s*<img', h)
+    if not m:
+        return h, []
+    return h[:m.start()], list(dict.fromkeys(re.findall(r'/organization/team/members/([^/"]+)/', h[m.start():])))
+
+
+def tidy(h):
+    for a, b in {'орбщественной': 'общественной', 'програма': 'программа', 'Финансовый-экономический': 'Финансово-экономический',
+                 'о изменении': 'об изменении', 'Пермском краю': 'Пермскому краю', 'Член  Деловой': 'Член Деловой'}.items():
+        h = h.replace(a, b)
+    return h
+
+
+def body_html(h):
+    return tidy(fix_links(clean_body(h or '')))
 
 
 def strip_tags(h):
     return ' '.join(re.sub(r'<[^>]+>', ' ', h or '').split())
-
-
-def first_sentence(h, n=180):
-    t = strip_tags(h)
-    t = re.sub(r'^(Описание)\s+', '', t)
-    if len(t) <= n:
-        return t
-    cut = t[:n]
-    i = max(cut.rfind('. '), cut.rfind('! '))
-    return (cut[:i + 1] if i > 60 else cut.rsplit(' ', 1)[0] + '…')
-
-
-def gallery_html(urls, limit=16):
-    if not urls:
-        return ''
-    return '<div class="gallery">' + ''.join(f'<a href="{img(u, 1600)}" data-lb><img src="{img(u, 400)}" alt="" loading="lazy"></a>' for u in urls[:limit]) + '</div>'
-
-
-def build_news(news):
-    cats = {'regional-office': 'Новости отделения', 'partners': 'Новости партнеров', 'events': 'Анонсы и итоги'}
-    local = [n for n in news if (n.get('date') or '') >= CUTOFF_NEWS]
-    loc_set = {n['url'] for n in local}
-    for n in local:
-        GENERATED.add(path_of(n['url']))
-    per = 24
-
-    def list_pages(items, base, title, cur):
-        pages = max(1, (len(items) + per - 1) // per)
-        tabs = '<div class="filters">' + f'<a class="chip{" on" if cur == "all" else ""}" href="{L("/news/")}" style="display:inline-flex;align-items:center">Все</a>' + ''.join(
-            f'<a class="chip{" on" if cur == k else ""}" href="{L(f"/news/{k}/")}" style="display:inline-flex;align-items:center">{v}</a>' for k, v in cats.items()) + '</div>'
-        for i in range(pages):
-            chunk = items[i * per:(i + 1) * per]
-            path = base if i == 0 else f'{base}page-{i + 1}/'
-            pager = ''
-            if pages > 1:
-                nums = sorted({1, 2, pages - 1, pages, i, i + 1, i + 2} & set(range(1, pages + 1)))
-                parts, prev = [], 0
-                for k in nums:
-                    if k - prev > 1:
-                        parts.append('<span class="gap">…</span>')
-                    href = L(base if k == 1 else f'{base}page-{k}/')
-                    parts.append(f'<span class="on">{k}</span>' if k == i + 1 else f'<a href="{href}">{k}</a>')
-                    prev = k
-                pager = f'<nav class="pager" aria-label="Страницы">{"".join(parts)}</nav>'
-            cards = ''.join(card_news(n, n['url'] in loc_set) for n in chunk)
-            body = crumbs(('Новости', '/news/' if cur != 'all' else None), *((title, None),) if cur != 'all' else ()) + page_head(title) + f'<div class="wrap" style="padding-bottom:80px">{tabs}<div class="grid g4">{cards}</div>{pager}</div>'
-            GENERATED.add(path)
-            layout(path, title + (f', страница {i + 1}' if i else ''), body, desc='Новости Пермского отделения «Деловой России» и партнеров.', active='/news/')
-
-    list_pages(news, '/news/', 'Новости', 'all')
-    for k, v in cats.items():
-        list_pages([n for n in news if n.get('cat') == k], f'/news/{k}/', v, k)
-    return local
-
-
-def render_news_details(local, news):
-    cats = {'regional-office': 'Новости отделения', 'partners': 'Новости партнеров', 'events': 'Анонсы и итоги'}
-    for n in local:
-        g = n.get('gallery') or []
-        cover = n.get('thumb') or (g[0] if g else None)
-        rest = [u for u in g if u != cover]
-        intro = f'<p class="intro">{esc(n["intro"])}</p>' if n.get('intro') else ''
-        same = [x for x in news if x.get('cat') == n.get('cat') and x['url'] != n['url'] and (x.get('date') or '') >= CUTOFF_NEWS][:4]
-        body = crumbs(('Новости', '/news/'), *(((cats[n['cat']], f'/news/{n["cat"]}/'),) if n.get('cat') in cats else ()), (n['title'][:60] + ('…' if len(n['title']) > 60 else ''), None)) + \
-            page_head(n['title'], meta=f'<span>{dfmt(n.get("date"))}</span><span class="tag">{esc(cats.get(n.get("cat"), ""))}</span>') + \
-            f'''<div class="wrap" style="padding-bottom:64px">{f'<div class="cover"><img src="{img(cover, 1200)}" alt=""></div>' if cover else ''}
-<article class="prose">{intro}{tidy(fix_links(clean_body(n.get('body') or '')))}</article>{gallery_html(rest)}{cta_join()}</div>
-<section class="sec soft"><div class="wrap"><div class="sec-h"><h2>Еще новости</h2><a class="link-more" href="{L('/news/')}">Все новости</a></div><div class="grid g4">{''.join(card_news(x) for x in same)}</div></div></section>'''
-        layout(path_of(n['url']), n['title'], body, desc=n.get('desc') or n.get('intro') or first_sentence(n.get('body', '')), active='/news/', og_img=None)
-
-
-def build_events(events):
-    local = [e for e in events if e['upcoming'] or (e.get('date') or '') >= CUTOFF_EVENTS]
-    for e in local:
-        GENERATED.add(path_of(e['url']))
-    GENERATED.add('/events/')
-    return local
-
-
-def render_events(local, events):
-    up = sorted([e for e in events if e['upcoming']], key=lambda e: e.get('date') or '9999')
-    past = [e for e in local if not e['upcoming'] and (e.get('date') or '') <= TODAY]
-    groups = {}
-    for e in past:
-        k = e['date'][:7]
-        groups.setdefault(k, []).append(e)
-    up_html = f'<div class="ev-list">{"".join(ev_card(e) for e in up)}</div>' if up else f'<div class="empty"><div><b>Скоро появится новое мероприятие</b><span>Анонсы выходят за 2–3 недели. Подпишитесь на Telegram-канал отделения.</span></div><a class="btn btn-line" href="{TG}">Telegram-канал</a></div>'
-    arch = ''
-    for k in sorted(groups, reverse=True):
-        y, m = k.split('-')
-        rows = ''.join(f'<a class="doc" href="{L(path_of(e["url"]))}"><div style="min-width:110px;color:var(--muted)">{dfmt(e["date"], False)}</div><div style="flex:1">{esc(e["title"])}</div>{"<span class=\"tag closed\">Для участников</span>" if e["closed"] else ""}</a>' for e in sorted(groups[k], key=lambda x: x['date'], reverse=True))
-        arch += f'<h3 style="margin:40px 0 16px">{MONTHS_N[int(m) - 1]} {y}</h3><div class="docs">{rows}</div>'
-    body = crumbs(('Мероприятия', None)) + page_head('Мероприятия', 'Открытые встречи можно посетить до вступления, чтобы познакомиться с сообществом. Закрытые проходят только для участников отделения.') + f'''
-<div class="wrap" style="padding-bottom:80px">
-<div class="sec-h"><h2>Ближайшие</h2><a class="link-more" href="#zayavka">Предложить мероприятие</a></div>{up_html}
-<div class="sec-h" style="margin-top:64px"><h2>Прошедшие</h2><p>С итогами и фотографиями. Архив за прошлые годы на <a href="{ORIG}/events/?archive=y" target="_blank" rel="noopener">текущем сайте</a>, при переезде переносится полностью.</p></div>
-{arch}</div>{lead_form('Предложить мероприятие или выступить спикером', 'Расскажите об идее. Дирекция поможет с площадкой, участниками и анонсом.', 'Участие в мероприятии')}'''
-    layout('/events/', 'Мероприятия', body, desc='Ближайшие и прошедшие мероприятия Пермского отделения «Деловой России».', active='/events/')
-    for e in local:
-        g = e.get('gallery') or []
-        is_past = (e.get('date') or '9999') < TODAY and not e['upcoming']
-        status = 'Прошло' if is_past else ('Только для участников' if e['closed'] else 'Открытое мероприятие')
-        if is_past:
-            act = cta_join('Хотите на следующую встречу?', 'Открытые мероприятия можно посетить до вступления. Оставьте контакты, пришлем приглашение.', 'Участие в мероприятии')
-        elif e['closed']:
-            act = cta_join('Мероприятие для участников сообщества', 'Чтобы попасть на такие встречи, обсудите вступление с дирекцией.', 'Вступление в «Деловую Россию»')
-        else:
-            act = cta_join('Регистрация на мероприятие', 'Оставьте контакты, дирекция подтвердит участие и пришлет детали.', 'Участие в мероприятии')
-        body = crumbs(('Мероприятия', '/events/'), (e['title'][:60], None)) + page_head(e['title'], meta=f'<span>{esc(e.get("date_text") or "")}{(" " + e["date"][:4]) if e.get("date") else ""}</span><span class="tag{" closed" if e["closed"] and not is_past else " arch" if is_past else " ok"}">{status}</span>') + \
-            f'<div class="wrap" style="padding-bottom:80px">{f"<div class=cover><img src={chr(34)}{img(g[0], 1200)}{chr(34)} alt=></div>" if g else ""}<article class="prose">{tidy(fix_links(clean_body(e.get("body") or "")))}</article>{gallery_html(g[1:])}{act}</div>'
-        layout(path_of(e['url']), e['title'], body, desc=e.get('desc') or first_sentence(e.get('body', '')), active='/events/')
-
-
-def build_team(team):
-    GENERATED.add('/organization/team/')
-    for p in team:
-        GENERATED.add(path_of(p['url']))
-
-
-def render_team(team):
-    chips = [('all', 'Все'), ('lead', 'Руководство'), ('council', 'Региональный совет'), ('member', 'Члены отделения')]
-    body = crumbs(('Сообщество', '/organization/about/'), ('Участники', None)) + page_head('Участники', 'Руководство, региональный совет и члены отделения. Найдите нужную компетенцию и предложите сотрудничество через дирекцию.') + f'''
-<div class="wrap" style="padding-bottom:80px">
-<div class="filters">{''.join(f'<button class="chip{" on" if k == "all" else ""}" data-f="{k}">{t}</button>' for k, t in chips)}<input class="search-in" type="search" placeholder="Поиск по имени, должности, проекту" data-q aria-label="Поиск участников"></div>
-<div class="people" data-people>{''.join(person_card(p, True) for p in team)}</div>
-<p class="note" style="margin-top:32px">Карточки показывают только тех, кто согласился на публикацию. Данные подтверждаются раз в год.</p>
-</div>{lead_form('Предложить сотрудничество участнику', 'Напишите, с кем и о чем хотите поговорить. Дирекция передаст запрос и договорится о знакомстве. Личные почты участников на сайте не публикуем.', 'Сотрудничество с участником')}'''
-    layout('/organization/team/', 'Участники', body, desc='Руководство, региональный совет и члены Пермского отделения «Деловой России».', active='/organization/team/')
-    for p in team:
-        ph = p.get('photo_big') or p.get('photo')
-        tags = ''.join(f'<span class="tag">#{esc(t)}</span> ' for t in (p.get('tags') or []) if not t.lower().startswith(p['name'].split()[0].lower()[:4]))
-        bio = tidy(fix_links(clean_body(p.get('bio') or '')))
-        bio = re.sub(r'<a href="mailto:[^"]+"[^>]*>.*?</a>|[\w.+-]+@[\w-]+\.[\w.]+', '', bio)
-        body = crumbs(('Участники', '/organization/team/'), (p['name'], None)) + f'''<div class="wrap" style="padding:24px var(--gut) 80px"><div class="prof">
-<div class="ph">{f'<img src="{img(ph, 640)}" alt="{esc(p["name"])}">' if ph else ''}</div>
-<div><h1>{esc(p['name'])}</h1><div class="role">{esc(p.get('role') or 'Член «Деловой России»')}</div><div style="margin-bottom:24px">{tags}</div>
-<a class="btn btn-primary" href="{L('/organization/team/')}?interest=Сотрудничество с участником#zayavka">Предложить сотрудничество</a>
-<article class="prose" style="margin-top:40px">{bio}</article></div></div></div>'''
-        layout(path_of(p['url']), p['name'], body, desc=p.get('desc') or f'{p["name"]}, {p.get("role", "")}', active='/organization/team/')
-
-
-def build_projects(projects):
-    GENERATED.add('/projects/')
-    for p in projects:
-        p['status'] = project_status(p)
-        p['lead'] = first_sentence(p.get('body', ''), 140)
-        GENERATED.add(f'/projects/{p["id"]}/')
-
-
-TEAM_BY_SLUG = {}
-
-
-def render_projects(projects):
-    act = [p for p in projects if p['status'] == 'active']
-    arc = [p for p in projects if p['status'] != 'active']
-    body = crumbs(('Проекты', None)) + page_head('Проекты', 'Инициативы участников отделения. К действующим проектам можно присоединиться, архивные остаются для истории.') + f'''
-<div class="wrap" style="padding-bottom:80px">
-<div class="sec-h"><h2>Действующие</h2><span class="tag ok">{len(act)}</span></div><div class="grid g3">{''.join(card_project(p) for p in act)}</div>
-<div class="sec-h" style="margin-top:64px"><h2>Архив</h2><span class="tag arch">{len(arc)}</span></div><div class="grid g4">{''.join(card_project(p) for p in arc)}</div>
-</div>{lead_form('Предложить свой проект', 'Расскажите о проекте или инвестиционной идее. Подскажем комитет, команду и формат поддержки.', 'Участие в проекте')}'''
-    layout('/projects/', 'Проекты', body, desc='Действующие и архивные проекты Пермского отделения «Деловой России».', active='/projects/')
-    for p in projects:
-        st = p['status'] == 'active'
-        kv = f'''<dl class="kv"><dt>Статус</dt><dd>{'<span class="tag ok">Действует</span>' if st else '<span class="tag arch">Архив</span>'}</dd>
-<dt>Как присоединиться</dt><dd>{'Оставить заявку ниже, дирекция свяжет с руководителем проекта' if st else 'Проект завершен, похожие инициативы в разделе действующих проектов'}</dd></dl>'''
-        g = p.get('gallery') or []
-        pbody, slugs = split_team(p.get('body') or '')
-        members = [TEAM_BY_SLUG[s] for s in slugs if s in TEAM_BY_SLUG]
-        team_html = f'<h2 style="margin:48px 0 24px">Команда проекта</h2><div class="people">{"".join(person_card(m) for m in members)}</div>' if members else ''
-        body = crumbs(('Проекты', '/projects/'), (p['title'].strip()[:60], None)) + page_head(p['title'].strip()) + \
-            f'<div class="wrap" style="padding-bottom:64px">{kv}<article class="prose">{tidy(fix_links(clean_body(pbody)))}</article>{gallery_html(g)}{team_html}</div>' + \
-            (lead_form('Присоединиться к проекту', f'Оставьте контакты, дирекция передаст запрос руководителю проекта «{p["title"].strip()}».', 'Участие в проекте') if st else '')
-        layout(f'/projects/{p["id"]}/', p['title'].strip(), body, desc=p.get('desc') or p['lead'], active='/projects/', og_img=None)
-
-
-def build_lists(sections):
-    for sec in ('commissions', 'clubs', 'boards', 'organization/partners'):
-        GENERATED.add(f'/{sec}/')
-        for it in sections[sec]:
-            if is_own(it['url']) and urlparse(it['url']).path.startswith(f'/{sec}/'):
-                GENERATED.add(path_of(it['url']))
-
-
-def render_lists(sections):
-    meta = {'commissions': ('Комитеты', 'Отраслевые комитеты отделения готовят позицию бизнеса и экспертные предложения. Вступить в комитет может любой участник.', 'Работа в комитете'),
-            'clubs': ('Клубы', 'Неформальные сообщества по интересам. Участник может присоединиться к клубу или открыть свой.', 'Другое'),
-            'boards': ('Советы и рабочие группы', 'Экспертные и общественные советы при органах власти, где представители отделения отстаивают интересы бизнеса.', 'Другое'),
-            'organization/partners': ('Партнеры', 'Органы власти, институты развития и компании, с которыми работает отделение.', 'Партнерство')}
-    for sec, (title, sub, interest) in meta.items():
-        items = sections[sec]
-        cards = ''
-        for it in items:
-            own = is_own(it['url']) and path_of(it['url']).startswith(f'/{sec}/')
-            href = L(path_of(it['url'])) if own and path_of(it['url']) in GENERATED else it['url']
-            ph = f'<div class="ph"><img src="{img(it["img"], 640)}" alt="" loading="lazy"{" style=object-fit:contain;padding:24px;background:#fff" if sec == "organization/partners" else ""}></div>' if it.get('img') else ''
-            cards += f'<a class="card" href="{esc(href)}">{ph}<div class="in"><h3>{esc(it["title"])}</h3></div></a>'
-        body = crumbs(('Сообщество', '/organization/about/'), (title, None)) + page_head(title, sub) + f'<div class="wrap layout">{side(SIDE_COMMUNITY, "/" + sec + "/")}<div><div class="grid g3">{cards}</div>{cta_join(interest=interest)}</div></div>'
-        layout(f'/{sec}/', title, body, desc=sub, active='/organization/about/')
-        for it in items:
-            pth = path_of(it['url'])
-            if not is_own(it['url']) or not pth.startswith(f'/{sec}/') or pth == f'/{sec}/':
-                continue
-            g = it.get('gallery') or []
-            body = crumbs((title, f'/{sec}/'), (it['title'][:60], None)) + page_head(it['title']) + \
-                f'<div class="wrap layout">{side(SIDE_COMMUNITY, "/" + sec + "/")}<div><article class="prose">{tidy(fix_links(clean_body(it.get("body") or "")))}</article>{gallery_html(g)}{cta_join(interest=interest)}</div></div>'
-            layout(path_of(it['url']), it['title'], body, desc=it.get('desc') or first_sentence(it.get('body', '')), active='/organization/about/')
-
-
-SERVICE_GROUPS = [('/services/package-of-documents/', 'Пакеты участия', 'users'), ('/services/investments-and-loans/', 'Финансы и инвестиции', 'banknote'),
-                  ('/services/pr-package-of-documents/', 'PR-пакеты', 'megaphone'), ('/services/common-services/', 'Общие услуги', 'briefcase'),
-                  ('/services/business-security/', 'Безопасность бизнеса', 'shield'), ('/services/upravlenie-komandirovkami/', 'Управление командировками', 'plane'),
-                  ('/services/obrazovatelnye-programmy-korporativnogo-universiteta-sberbanka/', 'Обучение', 'graduation')]
-
-
-def build_services(pages):
-    for k in pages:
-        if k.startswith('/services/') and '?' not in k:
-            GENERATED.add(k)
-
-
-def compare_table():
-    rows = [('Деловые контакты, закрытые чаты отделения', True, True), ('Значок и сертификат организации', True, True),
-            ('Карточка компании с компетенциями на ресурсах «Деловой России»', True, True), ('Рассылка предложения компании по базе участников', True, True),
-            ('Консультации по финансированию, продажам и выходу на новые рынки', True, True), ('Встречи с органами власти, участие в стратегических сессиях', True, True),
-            ('Работа в отраслевых комитетах и экспертных советах', True, True), ('Клубы по интересам, бизнес-завтраки, форум-группы', True, True),
-            ('Два крупных события отделения в год', True, True), ('Персональный менеджер, календарь полезных встреч', False, True),
-            ('Проверка рисков, помощь при проверках, защита от недобросовестных действий', False, True),
-            ('Подбор программ поддержки, грантов, льготных кредитов', False, True), ('Помощь в поиске сотрудников и менторов', False, True),
-            ('Выход на экспорт и в новые регионы через сеть организации', False, True), ('Интервью о компании, выступления на форумах организации и партнеров', False, True),
-            ('Закрытые встречи с первыми лицами бизнеса и власти', False, True)]
-    yn = lambda v: '<td class="y">Да</td>' if v else '<td class="n">Нет</td>'
-    return f'''<div class="tbl-wrap"><table class="cmp"><thead><tr><th>Что входит</th><th>«Базовый»<small>100 000 ₽ в год</small></th><th>«Премиум»<small>190 000 ₽ в год</small></th></tr></thead>
-<tbody>{''.join(f'<tr><th>{esc(r)}</th>{yn(a)}{yn(b)}</tr>' for r, a, b in rows)}</tbody></table></div>
-<p class="note" style="margin-top:16px">Цены с сайта отделения на {dfmt(TODAY)}. Вступительный взнос, состав пакетов «Член регионального совета» и «Меценат» дирекция подтверждает отдельно.</p>'''
-
-
-def render_services(pages):
-    # хаб «Возможности»
-    cards = ''
-    for href, title, ic in SERVICE_GROUPS:
-        kids = [(k, v) for k, v in pages.items() if k.startswith(href) and k != href and '?' not in k]
-        lst = ''.join(f'<li><a href="{L(k)}">{esc(svc_title(v["title"]))}</a></li>' for k, v in kids[:6])
-        cards += f'<div class="benefit"><div class="ic">{icon(ic)}</div><h3><a href="{L(href)}">{title}</a></h3><ul style="margin:0;padding-left:20px;color:var(--ink-2);font-size:15px">{lst}</ul></div>'
-    side_items = [('Возможности', None)] + [(t, h) for h, t, _ in SERVICE_GROUPS]
-    body = crumbs(('Возможности', None)) + page_head('Возможности участников', 'Что дает членство в отделении и какие сервисы доступны участникам и их компаниям.') + \
-        f'<div class="wrap" style="padding-bottom:64px"><h2 style="margin-bottom:24px">Пакеты участия</h2>{compare_table()}<div style="margin-top:24px;display:flex;gap:16px;flex-wrap:wrap"><a class="btn btn-primary" href="{L("/organization/how-to-join/")}#zayavka">Обсудить вступление</a><a class="btn btn-line" href="#pay" data-pay>Оплатить взнос</a></div>' + \
-        f'<h2 style="margin:64px 0 24px">Сервисы для участников</h2><div class="grid g3">{cards}</div></div>{lead_form()}'
-    layout('/services/', 'Возможности', body, desc='Пакеты участия и сервисы для участников Пермского отделения «Деловой России».', active='/services/')
-    for k, v in pages.items():
-        if not k.startswith('/services/') or k == '/services/' or '?' in k:
-            continue
-        grp = next((h for h, _, _ in SERVICE_GROUPS if k.startswith(h)), '/services/')
-        kids = [(kk, vv) for kk, vv in pages.items() if kk.startswith(k) and kk != k and '?' not in kk and kk.count('/') == k.count('/') + 1]
-        listing = ''
-        if kids:
-            listing = '<div class="grid g2" style="margin-top:8px">' + ''.join(f'<a class="card" href="{L(kk)}"><div class="in"><h3>{esc(svc_title(vv["title"]))}</h3><p>{esc(first_sentence(vv.get("body", ""), 150))}</p></div></a>' for kk, vv in kids) + '</div>'
-        bodyh = tidy(fix_links(clean_body(v.get('body') or '')))
-        if kids:
-            bodyh = ''  # у разделов в исходнике только список заголовков
-        if k == '/services/package-of-documents/':
-            bodyh = compare_table()
-            listing = ''
-        if k.endswith('/chlen-delovoy-rossii-paket-premium/'):
-            bodyh = premium_text()
-        if k.endswith('/chlen-delovoy-rossii/'):
-            bodyh = '<p class="intro">100 000 ₽ в год</p>' + re.sub(r'^<p>\s*Описание\s*', '<p>', bodyh)
-        title = svc_title(v['title'])
-        body = crumbs(('Возможности', '/services/'), (title[:60], None)) + page_head(title) + \
-            f'<div class="wrap layout">{side(side_items, grp)}<div><article class="prose" style="max-width:none">{bodyh}</article>{listing}{cta_join("Нужна эта возможность?", "Оставьте заявку, дирекция расскажет условия для участников и подберет эксперта.", "Вступление в «Деловую Россию»")}</div></div>'
-        layout(k, title, body, desc=v.get('desc') or first_sentence(v.get('body', '')), active='/services/')
-
-
-def svc_title(s):
-    return tidy(re.sub(r'Член\s+Деловой России/', '', s)).strip()
-
-
-def premium_text():
-    return '''<p class="intro">190 000 ₽ в год. Все возможности пакета «Базовый» и персональное сопровождение.</p>
-<h3>Персональный менеджер</h3><ul><li>Знает специфику вашего бизнеса и знакомит с нужными людьми в отделении и федеральной сети.</li><li>Составляет календарь полезных для вас встреч на месяц и квартал.</li><li>Собирает ключевые новости, изменения законодательства и события по вашей отрасли.</li></ul>
-<h3>Сопровождение и развитие бизнеса</h3><ul><li>Проверка рисков в отношении налоговых и контрольно-надзорных органов, помощь при проверках.</li><li>Защита от недобросовестных действий конкурентов.</li><li>Регулярный подбор программ поддержки, грантов, субсидий и льготных кредитов.</li><li>Помощь в поиске сотрудников, узких специалистов и менторов.</li><li>Выход на экспорт и в новые регионы через федеральную сеть «Деловой России».</li></ul>
-<h3>Продвижение</h3><ul><li>Публикации на сайте отделения, странице отделения на федеральном сайте и в приложении «Деловая Россия».</li><li>Интервью о вас и компании, рассылка предложения по базе участников.</li><li>Выступления на конференциях и форумах организации и партнеров, бизнес-завтраки с презентацией продукции.</li></ul>
-<h3>Закрытые встречи</h3><ul><li>Встречи с первыми лицами бизнеса и власти по конкретному вопросу.</li><li>Клубные форматы для премиум-участников, деловые выезды и бизнес-миссии.</li></ul>'''
-
-
-def build_static_pages(pages):
-    for k in ['/organization/about/', '/organization/perm-region/', '/organization/experts/', '/organization/docs/', '/organization/requisites/', '/contacts/', '/organization/how-to-join/', '/privacy/']:
-        GENERATED.add(k)
-
-
-def render_static(pages, team):
-    for k in ['/organization/about/', '/organization/perm-region/', '/organization/experts/', '/organization/requisites/']:
-        v = pages[k]
-        b = tidy(fix_links(clean_body(v['body'])))
-        b = re.sub(r'<p>\s*Контакты\s*</p>\s*$', '', b)
-        body = crumbs(('Сообщество', '/organization/about/'), (v['title'], None)) + page_head(v['title']) + \
-            f'<div class="wrap layout">{side(SIDE_COMMUNITY, k)}<div><article class="prose">{b}</article>{cta_join()}</div></div>'
-        layout(k, v['title'], body, desc=v.get('desc') or first_sentence(v['body']), active='/organization/about/')
-    # документы: ссылки на файлы исходного сайта, опечатки исправлены
-    v = pages['/organization/docs/']
-    b = tidy(fix_links(clean_body(v['body'])))
-    body = crumbs(('Сообщество', '/organization/about/'), ('Документы', None)) + page_head('Документы', 'Устав, положение о членстве, презентации и материалы для партнеров. Файлы открываются с текущего сайта отделения.') + \
-        f'''<div class="wrap layout">{side(SIDE_COMMUNITY, '/organization/docs/')}<div>
-<h2 style="margin-bottom:16px">Для вступления</h2><div class="docs">
-<a class="doc" href="{ORIG}/upload/Вступление в ДР Пермский край вер 2.0 от 13.01.2023.docx" target="_blank" rel="noopener"><div class="ic">{icon('file', 20)}</div><div>Пакет документов на вступление<small>DOCX · версия 2.0 от 13.01.2023</small></div></a>
-<a class="doc" href="{ORIG}/upload/Положение о членстве в ПК РО ООО Деловая Россия от 27.01.2025 г..pdf" target="_blank" rel="noopener"><div class="ic">{icon('file', 20)}</div><div>Положение о членстве<small>PDF · от 27.01.2025</small></div></a>
-<a class="doc" href="{ORIG}/upload/Устав ПК РО Деловая Россия вер. 1.0 от 03.09.2019г..pdf" target="_blank" rel="noopener"><div class="ic">{icon('file', 20)}</div><div>Устав Пермского краевого регионального отделения<small>PDF · от 03.09.2019</small></div></a>
-</div>
-<h2 style="margin:48px 0 16px">Все материалы</h2><article class="prose">{b}</article>
-<p class="note">Документы проверены {dfmt(TODAY)}. Публичный отчет за 2024–2025 годы и презентация на 2026 год готовятся дирекцией.</p></div></div>'''
-    layout('/organization/docs/', 'Документы', body, desc='Устав, положение о членстве, пакет документов на вступление и материалы отделения.', active='/organization/about/')
-    # контакты
-    body = crumbs(('Контакты', None)) + page_head('Контакты', 'Дирекция отделения отвечает на вопросы о вступлении, мероприятиях и проектах.') + f'''
-<div class="wrap" style="padding-bottom:80px"><div class="cont">
-<dl><div><dt>Телефон</dt><dd><a href="{PHONE_HREF}">{PHONE}</a></dd></div><div><dt>Почта</dt><dd><a href="mailto:{EMAIL}">{EMAIL}</a></dd></div>
-<div><dt>Адрес</dt><dd>{ADDR}</dd></div><div><dt>Режим работы</dt><dd>{HOURS}, сб и вс выходные</dd></div>
-<div><dt>Исполнительный директор</dt><dd>Ирина Жданова</dd></div>
-<div><dt>Мы в сети</dt><dd style="display:flex;gap:16px;flex-wrap:wrap"><a href="{TG}" target="_blank" rel="noopener">Telegram</a><a href="{VK}" target="_blank" rel="noopener">ВКонтакте</a><a href="{RUTUBE}" target="_blank" rel="noopener">Rutube</a></dd></div>
-<div><a class="btn btn-line" href="https://yandex.ru/maps/?text={esc('Пермь, улица Революции, 20')}" target="_blank" rel="noopener">Маршрут в Яндекс Картах</a></div></dl>
-<div class="map"><iframe title="Карта, Пермь, ул. Революции, 20" loading="lazy" src="https://yandex.ru/map-widget/v1/?text={esc('Пермь, улица Революции, 20')}&amp;z=16"></iframe></div>
-</div></div>{lead_form('Написать в дирекцию', 'Оставьте контакты и тему вопроса, перезвоним в рабочее время.', 'Другое')}'''
-    layout('/contacts/', 'Контакты', body, desc=f'Пермское отделение «Деловой России», {ADDR}, {PHONE}.', active='/contacts/')
-    # политика
-    v = pages.get('/include/licenses_detail.php')
-    if v:
-        body = crumbs(('Политика конфиденциальности', None)) + page_head('Политика конфиденциальности') + f'<div class="wrap" style="padding-bottom:80px"><article class="prose">{tidy(fix_links(clean_body(v["body"])))}</article></div>'
-        layout('/privacy/', 'Политика конфиденциальности', body, desc='Политика обработки персональных данных.')
-    render_join(team)
-
-
-def render_join(team):
-    faq = [('Кто может вступить?', 'Собственники и руководители среднего и крупного бизнеса, бизнес-консультанты и эксперты в предпринимательстве. Членство индивидуальное, вступает человек, а не компания.'),
-           ('Сколько стоит участие?', 'Годовой взнос по пакету «Базовый» 100 000 ₽, по пакету «Премиум» 190 000 ₽. Размер вступительного взноса уточнит дирекция.'),
-           ('Можно ли сначала познакомиться с сообществом?', 'Да. Приходите на открытое мероприятие отделения или на встречу в офисе на Революции, 20. После короткой заявки дирекция пригласит вас.'),
-           ('Какие документы нужны?', 'Заявление, анкета кандидата, согласие на обработку персональных данных и документ об оплате вступительного взноса. Шаблоны пришлем после разговора.'),
-           ('Сколько длится рассмотрение?', 'Решение принимает отделение, затем его утверждает Региональный совет на ближайшем заседании. Точный срок назовет дирекция.'),
-           ('Что дальше после вступления?', 'Вы получаете значок и сертификат, доступ в закрытые чаты, карточку на сайте. Дирекция знакомит с комитетами и клубами под ваши задачи.')]
-    body = crumbs(('Вступить', None)) + f'''
-<section class="hero" style="padding-top:40px"><div class="wrap" style="grid-template-columns:1fr">
-<div><h1>Вступить в «Деловую Россию» в Пермском крае</h1>
-<p class="lead">Сообщество для собственников и руководителей компаний, которым нужны деловые связи, поддержка и голос бизнеса в регионе. Путь от заявки до решения совета занимает пять шагов.</p>
-<div class="ctas"><a class="btn btn-primary" href="#zayavka">Оставить заявку на знакомство</a><a class="btn btn-line" href="{PHONE_HREF}">{PHONE}</a></div></div></div></section>
-<section class="sec tight"><div class="wrap"><div class="sec-h"><h2>Как проходит вступление</h2></div>{steps_html()}</div></section>
-<section class="sec soft"><div class="wrap"><div class="sec-h"><h2>Кому подходит</h2></div>
-<div class="grid g3">
-<div class="benefit"><div class="ic">{icon('building')}</div><h3>Собственникам и директорам</h3><p>Среднего и крупного бизнеса Пермского края в любой отрасли.</p></div>
-<div class="benefit"><div class="ic">{icon('trending')}</div><h3>Тем, кто растет</h3><p>Выходит на новые рынки, ищет финансирование, партнеров и подрядчиков.</p></div>
-<div class="benefit"><div class="ic">{icon('briefcase')}</div><h3>Экспертам и консультантам</h3><p>Кто готов делиться опытом в комитетах, советах и на бизнес-завтраках.</p></div>
-</div></div></section>
-<section class="sec"><div class="wrap"><div class="sec-h"><h2>Форматы участия и взносы</h2></div>{compare_table()}
-<div style="margin-top:24px"><a class="link-more" href="{L('/services/package-of-documents/chlen-delovoy-rossii-paket-premium/')}">Подробнее о пакете «Премиум»</a></div></div></section>
-<section class="sec soft"><div class="wrap"><div class="sec-h"><h2>Документы</h2><p>Шаблоны пришлем после разговора. Можно скачать заранее.</p></div>
-<div class="docs" style="max-width:820px">
-<a class="doc" href="{ORIG}/upload/Вступление в ДР Пермский край вер 2.0 от 13.01.2023.docx" target="_blank" rel="noopener"><div class="ic">{icon('file', 20)}</div><div>Пакет документов на вступление<small>Заявление, анкета, согласие · DOCX</small></div></a>
-<a class="doc" href="{ORIG}/upload/Положение о членстве в ПК РО ООО Деловая Россия от 27.01.2025 г..pdf" target="_blank" rel="noopener"><div class="ic">{icon('file', 20)}</div><div>Положение о членстве<small>PDF · от 27.01.2025</small></div></a>
-<a class="doc" href="{ORIG}/upload/Устав ПК РО Деловая Россия вер. 1.0 от 03.09.2019г..pdf" target="_blank" rel="noopener"><div class="ic">{icon('file', 20)}</div><div>Устав отделения<small>PDF · от 03.09.2019</small></div></a>
-</div></div></section>
-<section class="sec"><div class="wrap"><div class="sec-h"><h2>Частые вопросы</h2></div><div class="faq">
-{''.join(f'<details><summary>{esc(q)}</summary><div class="a">{esc(a)}</div></details>' for q, a in faq)}</div></div></section>
-{lead_form('Заявка на знакомство', 'Это первый шаг, он ни к чему не обязывает. Исполнительный директор позвонит в течение двух рабочих дней.', 'Вступление в «Деловую Россию»')}'''
-    layout('/organization/how-to-join/', 'Вступить', body, desc='Как вступить в Пермское отделение «Деловой России»: условия, взносы, этапы, документы, частые вопросы.', active=None)
-    redirect('/organization/kak-vstupit/', '/organization/how-to-join/')
-
-
-def redirect(frm, to):
-    f = os.path.join(OUT, frm.lstrip('/'), 'index.html')
-    os.makedirs(os.path.dirname(f), exist_ok=True)
-    open(f, 'w').write(f'<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><meta http-equiv="refresh" content="0;url={L(to)}"><link rel="canonical" href="{L(to)}"><a href="{L(to)}">{L(to)}</a>')
-    GENERATED.add(frm)
 
 
 def plural(n, one, few, many):
@@ -898,27 +209,595 @@ def plural(n, one, few, many):
     return one if n == 1 else few if 2 <= n <= 4 else many
 
 
-def compute_stats(news, events, team, projects, sections):
-    y = TODAY[:4]
-    last12 = (datetime.date.fromisoformat(TODAY) - datetime.timedelta(days=365)).isoformat()
-    ev12 = sum(1 for e in events if last12 <= (e.get('date') or '') <= TODAY)
-    news12 = sum(1 for n in news if (n.get('date') or '') >= last12)
-    act = sum(1 for p in projects if p['status'] == 'active')
-    members = len(team)
-    period = f'{dfmt(last12)} – {dfmt(TODAY)}'
-    return {
-        'hero': [(f'{int(y) - 2004}', plural(int(y) - 2004, 'год', 'года', 'лет') + ' работы', 'отделение с 2004 года'),
-                 (f'{ev12}', plural(ev12, 'мероприятие', 'мероприятия', 'мероприятий') + ' за год', 'последние 12 месяцев'),
-                 (f'{members}', plural(members, 'участник', 'участника', 'участников') + ' на сайте', f'на {dfmt(TODAY)}')],
-        'scale': [(f'{ev12}', plural(ev12, 'мероприятие', 'мероприятия', 'мероприятий'), f'за последние 12 месяцев, {period}'),
-                  (f'{act}', plural(act, 'действующий проект', 'действующих проекта', 'действующих проектов'), f'на {dfmt(TODAY)}, статусы предварительные'),
-                  (f'{len(sections["boards"])}', plural(len(sections["boards"]), 'совет и рабочая группа', 'совета и рабочих группы', 'советов и рабочих групп'), 'при органах власти, где работают делороссы'),
-                  ('1 млрд ₽', 'льготного финансирования', 'получили участники, по данным отделения, период уточняется'),
-                  ('20', 'предложений', 'по изменению законодательства, по данным отделения'),
-                  (f'{len(sections["commissions"])}', plural(len(sections["commissions"]), 'комитет', 'комитета', 'комитетов'), 'отраслевых и тематических'),
-                  (f'{len(sections["clubs"])}', plural(len(sections["clubs"]), 'клуб', 'клуба', 'клубов'), 'по интересам'),
-                  (f'{news12}', plural(news12, 'новость', 'новости', 'новостей'), 'за последние 12 месяцев')],
-    }
+# ---------------- данные ----------------
+D = {}
+
+
+def load():
+    news = [n for n in J('news.json') if n.get('title') and n.get('url', '').count('/') >= 6]
+    for n in news:
+        n['cat'] = n.get('cat') or urlparse(n['url']).path.split('/')[2]
+        n['local'] = (n.get('date') or '') >= NEWS_FROM
+        n['pic'] = n.get('thumb') or (n.get('gallery') or [None])[0]
+    events = J('events.json')
+    for e in events:
+        e['local'] = e['upcoming'] or (e.get('date') or '') >= EVENTS_FROM
+    team = [p for p in J('team.json') if p.get('url') and '/members/' in p['url']]
+    sections = J('sections.json')
+    projects = []
+    for p in sections['projects']:
+        pid = p['url'].rstrip('/').split('/')[-1]
+        if pid.isdigit():
+            p['id'] = pid
+            years = [int(y) for y in re.findall(r'\b(20[12]\d)\b', p.get('body', '') + ' ' + p['title'])]
+            p['active'] = int(pid) >= 149 or bool(years and max(years) >= 2025)
+            p['title'] = p['title'].strip()
+            projects.append(p)
+    D.update(news=news, events=events, team=team, sections=sections, pages=J('pages.json'), projects=projects,
+             team_by_slug={p['url'].rstrip('/').split('/')[-1]: p for p in team})
+
+
+def nhref(n):
+    return L(path_of(n['url'])) if n['local'] else n['url']
+
+
+def ntarget(n):
+    return '' if n['local'] else ' target="_blank" rel="noopener"'
+
+
+def pic_tag(url, w, alt='', extra=''):
+    return f'<img src="{img(url, w)}" alt="{esc(alt)}" loading="lazy"{extra}>' if url else ''
+
+
+# ---------------- каркас ----------------
+NAV = None
+TEAM_GROUPS = [('Председатель и сопредседатель', '/organization/team/rukovodstvo/', 'rukovodstvo'),
+               ('Исполнительная дирекция', '/organization/team/direkciya/', 'direkciya'),
+               ('Региональный совет', '/organization/team/sovet/', 'sovet'),
+               ('Лидеры комитетов', '/organization/team/lidery/', 'lidery'),
+               ('Члены отделения', '/organization/team/chleny/', 'chleny')]
+SERVICE_GROUPS = [('/services/package-of-documents/', 'Пакеты участия', 'users'), ('/services/investments-and-loans/', 'Финансы и инвестиции', 'banknote'),
+                  ('/services/pr-package-of-documents/', 'PR-пакеты', 'megaphone'), ('/services/common-services/', 'Общие услуги', 'briefcase'),
+                  ('/services/business-security/', 'Безопасность бизнеса', 'shield'), ('/services/upravlenie-komandirovkami/', 'Управление командировками', 'plane'),
+                  ('/services/obrazovatelnye-programmy-korporativnogo-universiteta-sberbanka/', 'Образовательные программы', 'graduation')]
+ABOUT_MENU = [('О «Деловой России»', '/organization/about/'), ('«Деловая Россия» в Пермском крае', '/organization/perm-region/'), ('Вступить', '/organization/how-to-join/'),
+              ('Партнеры', '/organization/partners/'), ('Документы', '/organization/docs/'), ('Реквизиты', '/organization/requisites/'), ('Контакты', '/contacts/')]
+TEAM_MENU = [(t, h) for t, h, _ in TEAM_GROUPS] + [('Эксперты', '/organization/experts/')]
+
+
+def build_nav():
+    pr = {p['id']: p for p in D['projects']}
+    return [
+        ('О нас', '/organization/about/', ABOUT_MENU),
+        ('Лица', '/organization/team/', TEAM_MENU),
+        ('Комитеты', '/commissions/', None),
+        ('Советы', '/boards/', None),
+        ('Клубы', '/clubs/', None),
+        ('Проекты', '/projects/', [(pr[i]['title'], f'/projects/{i}/') for i in PRIORITY if i in pr] + [('Все проекты', '/projects/')]),
+        ('Возможности', '/services/', [(t, h) for h, t, _ in SERVICE_GROUPS]),
+        ('Мероприятия', '/events/', None),
+        ('Пресс-центр', '/news/', [('Все новости', '/news/')] + [(v, f'/news/{k}/') for k, v in CATS.items()]),
+        ('Контакты', '/contacts/', None),
+    ]
+
+
+def soc_links():
+    return (f'<div class="soc"><a href="{VK}" target="_blank" rel="noopener" aria-label="ВКонтакте">vk</a>'
+            f'<a href="{TG}" target="_blank" rel="noopener" aria-label="Telegram">{icon("send")}</a>'
+            f'<a href="{RUTUBE}" target="_blank" rel="noopener" aria-label="Rutube">{icon("play")}</a></div>')
+
+
+def header(active):
+    items = ''
+    for t, h, sub in NAV:
+        dd = '<ul class="dd">' + ''.join(f'<li><a href="{L(sh)}">{esc(st)}</a></li>' for st, sh in sub) + '</ul>' if sub else ''
+        items += f'<li{" class=on" if active == h else ""}><a href="{L(h)}">{esc(t)}</a>{dd}</li>'
+    mob = ''
+    for t, h, sub in NAV:
+        mob += f'<a href="{L(h)}">{esc(t)}</a>'
+        if sub:
+            mob += '<div class="sub">' + ''.join(f'<a href="{L(sh)}">{esc(st)}</a>' for st, sh in sub) + '</div>'
+    return f'''<header>
+<div class="ht"><div class="c">
+ <a class="hb" href="{L('/organization/how-to-join/')}">Вступить в<br>организацию {icon('userplus')}</a>
+ {soc_links()}
+ <a class="hb blue" href="#pay" data-pay>Оплатить<br>взнос {icon('card')}</a>
+ <a class="hb blue hide-l" href="{BOOK}" target="_blank" rel="noopener">Книга «Предприниматели<br>и меценаты Прикамья» {icon('book')}</a>
+ <a class="hphone" href="{PHONE_HREF}">{PHONE}</a>
+ <form class="hsearch" action="{L('/search/')}" role="search"><input name="q" aria-label="Поиск по сайту"><button aria-label="Найти">{icon('search')}</button></form>
+</div></div>
+<div class="hn"><div class="c">
+ <a class="logo" href="{L('/')}"><img src="{L('/assets/logo.png')}" alt="Деловая Россия. Пермский край" width="150" height="44"></a>
+ <ul class="nav">{items}</ul>
+ <button class="burger" aria-label="Меню" aria-expanded="false" data-burger>{icon('menu')}</button>
+</div></div>
+<div class="mnav" data-mnav>{mob}<a href="{PHONE_HREF}">{PHONE}</a><a href="#pay" data-pay>Оплатить взнос</a><a href="{L('/search/')}">Поиск</a><a class="btn" href="{L('/organization/how-to-join/')}">Вступить в организацию</a></div>
+</header>'''
+
+
+def partner_href(p):
+    own = is_own(p['url']) and path_of(p['url']).startswith('/organization/partners/')
+    return (L(path_of(p['url'])), '') if own else (esc(p['url']), ' target="_blank" rel="noopener"')
+
+
+def partners_strip():
+    cards, seen = '', set()
+    for p in D['sections']['organization/partners']:
+        f = os.path.join(MIR, unquote(path_of(p.get('img') or '')).lstrip('/'))
+        key = hashlib.md5(open(f, 'rb').read()).hexdigest() if p.get('img') and os.path.isfile(f) else os.path.basename(p.get('img') or '')
+        if p.get('img') and key not in seen and not seen.add(key):
+            h, t = partner_href(p)
+            cards += f'<a class="pt" href="{h}"{t} title="{esc(p["title"])}">{pic_tag(p["img"], 320, p["title"])}</a>'
+    return f'''<section class="sec soft"><div class="c"><div class="sh"><h2>Наши партнёры</h2></div>
+<div class="slider" data-slider><div class="track">{cards}</div><div class="ctl-row"><div class="nav-btns"><button class="nb" data-prev aria-label="Назад">{icon('chl')}</button><button class="nb" data-next aria-label="Вперед">{icon('chr')}</button></div></div></div></div></section>'''
+
+
+def footer():
+    return f'''{partners_strip()}
+<footer class="ftr"><div class="c">
+ <div class="fa"><span>{ADDR}</span><i></i><a href="{PHONE_HREF}">тел.: {PHONE}</a><i></i><a href="mailto:{EMAIL}">Email: {EMAIL}</a></div>
+ <div class="fm2"><img src="{L('/assets/logo.png')}" alt="" width="136" height="40"><p><b>© Пермское краевое региональное отделение «Деловая Россия», 2004–{TODAY[:4]}.</b><br>ИНН 5902990323 · Пн–пт 9:00–18:00</p>{soc_links()}</div>
+ <div class="fb"><a href="{L('/privacy/')}">Политика обработки персональных данных</a><a href="{L('/organization/requisites/')}">Реквизиты</a><a href="{L('/organization/docs/')}">Документы</a><a href="#pay" data-pay>Оплатить взнос</a><span class="r">Макет сайта · DAPI</span></div>
+</div></footer>
+<div class="modal" id="pay" role="dialog" aria-modal="true" aria-labelledby="pay-h"><div class="bx"><button class="x" data-close aria-label="Закрыть">×</button>
+ <h3 id="pay-h">Оплатить членский взнос</h3><p class="note">Годовой взнос по пакету «Базовый» 100 000 ₽, по пакету «Премиум» 190 000 ₽. Сумма вводится на странице оплаты.</p>
+ <div class="pay"><a href="{PAY_SBER}" target="_blank" rel="noopener"><span>Банковской картой<small>Платежная страница ПАО Сбербанк</small></span>{icon('right')}</a>
+ <a href="{PAY_CKASSA}" target="_blank" rel="noopener"><span>Через «Центральную кассу»<small>Поставщик «Деловая Россия», Пермский край</small></span>{icon('right')}</a></div>
+ <p class="note" style="margin-top:16px">Оплата по счету: напишите на <a href="mailto:{EMAIL}" style="color:var(--blue)">{EMAIL}</a>.</p></div></div>
+<div class="modal" id="thanks" role="dialog" aria-modal="true"><div class="bx"><button class="x" data-close aria-label="Закрыть">×</button><h3>Спасибо за отправленную заявку!</h3><p class="note">Исполнительная дирекция отделения свяжется с вами по указанному телефону.</p></div></div>'''
+
+
+def layout(path, title, main, desc='', active=None):
+    desc = re.sub(r'(Вступить в комитет\s*)?Array\s*\(.*', '', desc or '', flags=re.S).strip() or title
+    full = 'Деловая Россия · Пермский край' if path == '/' else f'{title} · Деловая Россия, Пермский край'
+    doc = f'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{esc(full)}</title><meta name="description" content="{esc((desc or '')[:200])}"><meta name="robots" content="noindex,nofollow">
+<link rel="canonical" href="{ORIG}{esc(path)}"><link rel="icon" href="{L('/assets/favicon.png')}">
+<link rel="preload" href="{L('/assets/fonts/onest-cyrillic-600.woff2')}" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{L('/assets/site.css')}?v={VER}"></head><body>
+{header(active)}<main>{main}</main>{footer()}
+<script>window.BASE={json.dumps(P)};</script><script src="{L('/assets/app.js')}?v={VER}" defer></script></body></html>'''
+    f = os.path.join(OUT, path.lstrip('/'), 'index.html') if path.endswith('/') else os.path.join(OUT, path.lstrip('/'))
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    open(f, 'w', encoding='utf-8').write(doc)
+
+
+def inner(path, title, crumbs, content, aside=None, desc='', active=None):
+    cb = f'<a href="{L("/")}">Главная</a>' + ''.join(f'<i></i><a href="{L(h)}">{esc(t)}</a>' if h else f'<i></i><span>{esc(t)}</span>' for t, h in crumbs)
+    aside = aside if aside is not None else wg_news() + wg_events()
+    main = f'<div class="cb"><div class="c">{cb}</div></div><div class="c"><h1 class="ph1">{esc(title)}</h1><div class="pg"><div>{content}</div><aside class="aside">{aside}</aside></div></div>'
+    layout(path, title, main, desc, active)
+
+
+# ---------------- виджеты правой колонки ----------------
+def wg_news(title='Новости', items=None, more=('Все новости', '/news/')):
+    items = items if items is not None else D['news'][:6]
+    if not items:
+        return ''
+    rows = ''.join(f'<a class="it" href="{nhref(n)}"{ntarget(n)}><small>{dfmt(n.get("date"))}</small>{esc(n["title"])}</a>' for n in items[:6])
+    return f'<div class="wg"><h3>{esc(title)}</h3>{rows}<a class="more" href="{L(more[1])}">{more[0]} {icon("right")}</a></div>'
+
+
+def wg_events():
+    up = sorted([e for e in D['events'] if e['upcoming']], key=lambda e: e.get('date') or '9')
+    if not up:
+        return ''
+    rows = ''.join(f'<a class="it" href="{L(path_of(e["url"]))}"><small>{esc(e.get("date_text") or "")}</small>{esc(e["title"])}</a>' for e in up[:5])
+    return f'<div class="wg"><h3>Анонсы</h3>{rows}<a class="more" href="{L("/events/")}">Все мероприятия {icon("right")}</a></div>'
+
+
+def wm(items, cur):
+    return '<nav class="wm">' + ''.join(f'<a href="{L(h)}"{" class=on" if h == cur else ""}>{esc(t)}</a>' for t, h in items) + '</nav>'
+
+
+def news_about(words, n=6):
+    rx = re.compile('|'.join(words), re.I)
+    return [x for x in D['news'] if rx.search(x['title'])][:n]
+
+
+# ---------------- общие куски ----------------
+def gallery(urls, limit=16):
+    if not urls:
+        return ''
+    return '<div class="gal">' + ''.join(f'<a href="{img(u, 1600)}" data-lb>{pic_tag(u, 400)}</a>' for u in urls[:limit]) + '</div>'
+
+
+def person(p):
+    return f'<a class="person" href="{L(path_of(p["url"]))}"><div class="im">{pic_tag(p.get("photo") or p.get("photo_big"), 480, p["name"])}</div><b>{esc(p["name"])}</b><span>{esc(p.get("role") or "Член «Деловой России»")}</span></a>'
+
+
+def people_block(slugs, title):
+    ms = [D['team_by_slug'][s] for s in slugs if s in D['team_by_slug']]
+    return f'<h2 class="h2s">{title}</h2><div class="people">{"".join(person(m) for m in ms)}</div>' if ms else ''
+
+
+def pager(base, i, pages):
+    if pages < 2:
+        return ''
+    nums = sorted({1, 2, pages - 1, pages, i, i + 1, i + 2} & set(range(1, pages + 1)))
+    out, prev = [], 0
+    for k in nums:
+        if k - prev > 1:
+            out.append('<span>…</span>')
+        out.append(f'<span class="on">{k}</span>' if k == i + 1 else f'<a href="{L(base if k == 1 else f"{base}page-{k}/")}">{k}</a>')
+        prev = k
+    return f'<nav class="pager" aria-label="Страницы">{"".join(out)}</nav>'
+
+
+def search_panel():
+    return f'''<form class="srch" action="{L('/search/')}"><input class="q" name="q" placeholder="Поиск" aria-label="Поиск"><button>Найти</button>
+<input name="from" type="date" aria-label="Дата от"><input name="to" type="date" aria-label="Дата до"></form>'''
+
+
+def news_row(n):
+    return f'<a class="row" href="{nhref(n)}"{ntarget(n)}><div class="im">{pic_tag(n.get("pic"), 320)}</div><div><small>{dfmt(n.get("date"))}</small><b>{esc(n["title"])}</b></div></a>'
+
+
+def ev_row(e):
+    up = e['upcoming']
+    yr = f'<small>{e["date"][:4]}</small>' if e.get('date') and not up else ''
+    return f'<a class="row ev" href="{L(path_of(e["url"]))}"><div class="d{" up" if up else ""}">{esc(e.get("date_text") or dfmt(e.get("date"), False))}{yr}</div><b>{esc(e["title"])}</b></a>'
+
+
+def slider_ctl(cls='ctl-row'):
+    btns = f'<button class="nb" data-prev aria-label="Назад">{icon("chl")}</button><button class="nb" data-next aria-label="Вперед">{icon("chr")}</button>'
+    return f'<div class="ctl-row"><div class="nav-btns">{btns}</div></div>' if cls == 'ctl-row' else f'<div class="ctl">{btns}</div>'
+
+
+# ---------------- главная (порядок блоков как на deloros.ru) ----------------
+def build_home():
+    news, events, team, projects, sections = D['news'], D['events'], D['team'], D['projects'], D['sections']
+    pr = {p['id']: p for p in projects}
+    up = sorted([e for e in events if e['upcoming']], key=lambda e: e.get('date') or '9')
+    # баннер
+    slides = [f'''<div class="ban ban-brand"><div class="t"><img class="logo-w" src="{L('/assets/logo.png')}" alt="Деловая Россия. Пермский край"><span>Пермское краевое региональное отделение общероссийской общественной организации «Деловая Россия». С 2004 года объединяет предпринимателей Прикамья.</span><a class="bt" href="{L('/organization/how-to-join/')}">Вступить в организацию</a></div></div>''']
+    for e in up[:2]:
+        g = e.get('gallery') or []
+        if g:
+            slides.append(f'<a class="ban shade" href="{L(path_of(e["url"]))}"><img class="bg" src="{img(g[0], 1600)}" alt=""><div class="t"><b>{esc(e["title"])}</b><span>{esc(e.get("date_text") or "")}</span><span class="bt">Подробнее</span></div></a>')
+    if pr.get('154', {}).get('img'):
+        slides.append(f'<a class="ban shade" href="{L("/projects/154/")}"><img class="bg" src="{img(pr["154"]["img"], 1600)}" alt=""><div class="t"><b>{esc(pr["154"]["title"])}</b><span>Проект отделения</span><span class="bt">Подробнее</span></div></a>')
+    intro = f'<section class="intro"><div class="c"><div class="slider" data-slider data-auto="7000"><div class="track">{"".join(slides)}</div>{slider_ctl("ctl")}</div></div></section>'
+    # новости
+    withpic = [n for n in news if n.get('pic')]
+    feat = withpic[:5]
+    fi = ''.join(f'<a class="fs{" on" if i == 0 else ""}" data-fi href="{nhref(n)}"{ntarget(n)}><img src="{img(n["pic"], 960)}" alt=""></a>' for i, n in enumerate(feat))
+    fs = ''.join(f'<div class="fs{" on" if i == 0 else ""}" data-ft><a href="{nhref(n)}"{ntarget(n)}><small>{dnum(n.get("date"))}</small><h3>{esc(n["title"])}</h3></a></div>' for i, n in enumerate(feat))
+    dots = ''.join(f'<i{" class=on" if i == 0 else ""} data-dot="{i}"></i>' for i in range(len(feat)))
+    cards = ''.join(f'<a class="nc" href="{nhref(n)}"{ntarget(n)}><h3>{esc(n["title"])}</h3><small>{dnum(n.get("date"))}</small><div class="im">{pic_tag(n["pic"], 640)}</div></a>' for n in withpic[5:11])
+    news_sec = f'''<section class="sec"><div class="c"><div class="sh"><h2>Новости</h2></div>
+<div class="feat" data-feat><div class="ph">{fi}</div><div class="tx">{fs}<div class="ctl"><div class="nav-btns"><button class="nb" data-fprev aria-label="Назад">{icon("chl")}</button><button class="nb" data-fnext aria-label="Вперед">{icon("chr")}</button></div><div class="dots">{dots}</div></div></div></div>
+<div class="ncards">{cards}</div><div style="margin-top:32px"><a class="more" href="{L('/news/')}">Все новости {icon('right')}</a></div></div></section>'''
+    # анонсы
+    past = [e for e in events if not e['upcoming'] and e['local']]
+    an_items = up + past[:max(0, 4 - len(up))]
+    an = ''.join(f'<a class="an" href="{L(path_of(e["url"]))}"><div class="d">{esc(e.get("date_text") or "")}</div><div class="t">{esc(e["title"])}</div><div class="lb">{"Только для членов сообщества" if e["closed"] else "Открытое мероприятие"}{"" if e["upcoming"] else " · прошло"}</div></a>' for e in an_items)
+    an_sec = f'''<section class="sec soft"><div class="c"><div class="sh"><h2>Анонсы</h2><a class="more" href="{L('/events/')}">Смотреть все мероприятия {icon('right')}</a></div>
+<div class="slider" data-slider><div class="track">{an}</div></div></div></section>'''
+    # слово председателя
+    by = {p['name'].split()[-1]: p for p in team}
+    qs = []
+    for n in news:
+        for sur in ('Теплов', 'Протопопов'):
+            if sur in n['title'] and sur in by and len(qs) < 8:
+                qs.append((n, by[sur]))
+                break
+    q_html = ''.join(f'<a class="qt" href="{nhref(n)}"{ntarget(n)}><div class="av">{pic_tag(p.get("photo") or p.get("photo_big"), 400, p["name"])}</div><div><div class="q">“</div><small>{dnum(n.get("date"))}</small><h3>{esc(n["title"])}</h3><div class="who">{esc(p["name"])}, {esc((p.get("role") or "").lower())}</div></div></a>' for n, p in qs)
+    q_sec = f'''<section class="sec"><div class="c"><div class="sh"><h2>Слово председателя</h2><a class="more" href="{L('/organization/team/rukovodstvo/')}">Руководство отделения {icon('right')}</a></div>
+<div class="slider" data-slider><div class="track">{q_html}</div>{slider_ctl()}</div></div></section>''' if qs else ''
+    # пресс-центр
+    tabs = [('all', 'Все события', news, '/news/')] + [(k, v, [n for n in news if n['cat'] == k], f'/news/{k}/') for k, v in CATS.items()]
+    tb = ''.join(f'<button class="{"on" if i == 0 else ""}" data-tab="{k}">{t}</button>' for i, (k, t, _, _) in enumerate(tabs))
+    panes = ''
+    for i, (k, t, items, href) in enumerate(tabs):
+        rows = ''.join(f'<a class="pr" href="{nhref(n)}"{ntarget(n)}><div class="im">{pic_tag(n.get("pic"), 320)}</div><b><small>{dnum(n.get("date"))}</small>{esc(n["title"])}</b></a>' for n in items[:6])
+        panes += f'<div class="tpane{" on" if i == 0 else ""}" data-pane="{k}"><a class="more" href="{L(href)}">К новостям раздела {icon("right")}</a><div class="pl">{rows}</div></div>'
+    pc_sec = f'<section class="sec soft"><div class="c"><div class="sh"><h2>Пресс-центр</h2></div><div data-tabs><div class="tabs">{tb}</div>{panes}</div></div></section>'
+    # направления
+    own = lambda sec: len([it for it in sections[sec] if is_own(it['url']) and path_of(it['url']).startswith(f'/{sec}/') and path_of(it['url']) != f'/{sec}/'])
+    nc, nb, nk = own('commissions'), own('boards'), own('clubs')
+    act = [p for p in projects if p['active']]
+    dcs = [('Комитеты', f'{nc} {plural(nc, "отраслевой комитет", "отраслевых комитета", "отраслевых комитетов")} отделения', '/commissions/'),
+           ('Советы и рабочие группы', f'{nb} {plural(nb, "совет", "совета", "советов")} и рабочих групп при органах власти, где работают делороссы', '/boards/'),
+           ('Клубы', f'{nk} {plural(nk, "клуб", "клуба", "клубов")} по интересам', '/clubs/'),
+           ('Проекты', f'{len(act)} {plural(len(act), "действующий проект", "действующих проекта", "действующих проектов")} отделения', '/projects/')]
+    dc = ''.join(f'<div class="dc"><span class="geo"></span><h3>{t}</h3><p>{d}</p><a class="bt" href="{L(h)}">Перейти</a></div>' for t, d, h in dcs)
+    sl = ''.join(f'<div class="sl"><img src="{img(pr[i]["img"], 1200)}" alt="" loading="lazy"><h3>{esc(pr[i]["title"])}</h3><a class="bt" href="{L(f"/projects/{i}/")}" style="margin-top:auto">Перейти</a></div>' for i in PRIORITY if i in pr and pr[i].get('img'))
+    dir_sec = f'''<section class="sec"><div class="c"><div class="sh"><h2>Направления</h2></div><div class="dir">{dc}
+<div class="dc wide"><div class="slider" data-slider style="height:100%"><div class="track">{sl}</div>{slider_ctl("ctl")}</div></div></div></div></section>'''
+    # полезное
+    use = [(BOOK, pr.get('154', {}).get('img'), 'Книга «Предприниматели и меценаты Прикамья»', ''),
+           (L('/projects/155/'), pr.get('155', {}).get('img'), 'Гид инвестора', ''),
+           (L('/organization/how-to-join/'), None, 'Как вступить в «Деловую Россию»', ' red'),
+           (L('/organization/docs/'), None, 'Устав, положение о членстве, пакет документов', ''),
+           (TG, None, 'Telegram-канал отделения', '')]
+    us = ''
+    for h, im, t, cls in use:
+        pic = pic_tag(im, 480) if im else f'<img src="{L("/assets/logo.png")}" alt="" style="object-fit:contain;padding:16px">'
+        us += f'<a class="use{cls}" href="{h}"{" target=_blank rel=noopener" if h.startswith("http") else ""}><div class="im">{pic}</div><span>{t}</span></a>'
+    use_sec = f'''<section class="sec" style="padding-top:0"><div class="c"><div class="sh"><h2>Полезное</h2></div><p class="sub2">Материалы и сервисы отделения</p>
+<div class="slider" data-slider><div class="track">{us}</div>{slider_ctl()}</div></div></section>'''
+    layout('/', 'Главная', intro + news_sec + an_sec + q_sec + pc_sec + dir_sec + use_sec,
+           desc='Пермское краевое региональное отделение «Деловой России»: новости, мероприятия, комитеты, проекты, вступление в организацию.', active='/')
+
+
+# ---------------- пресс-центр, мероприятия, поиск ----------------
+def build_news():
+    news = D['news']
+    per = 20
+    lists = [('/news/', 'Новости', news)] + [(f'/news/{k}/', v, [n for n in news if n['cat'] == k]) for k, v in CATS.items()]
+    menu = [('Все новости', '/news/')] + [(v, f'/news/{k}/') for k, v in CATS.items()]
+    for base, title, items in lists:
+        pages = max(1, (len(items) + per - 1) // per)
+        for i in range(pages):
+            path = base if i == 0 else f'{base}page-{i + 1}/'
+            content = search_panel() + '<div class="rows">' + ''.join(news_row(n) for n in items[i * per:(i + 1) * per]) + '</div>' + pager(base, i, pages)
+            crumbs = [('Пресс-центр', '/news/')] + ([(title, None)] if base != '/news/' else [])
+            inner(path, title, crumbs, content, aside=wm(menu, base) + wg_events(), desc='Новости Пермского отделения «Деловой России».', active='/news/')
+    for n in news:
+        if not n['local']:
+            continue
+        g = n.get('gallery') or []
+        cover = n.get('thumb') or (g[0] if g else None)
+        intro = f'<p class="lead">{esc(n["intro"])}</p>' if n.get('intro') else ''
+        tag = f'<a class="tg" href="{L("/news/" + n["cat"] + "/")}">{CATS[n["cat"]]}</a>' if n['cat'] in CATS else ''
+        content = f'<div class="meta"><span>{dfmt(n.get("date"))}</span>{tag}</div>' + \
+            (f'<div class="cover"><img src="{img(cover, 1200)}" alt=""></div>' if cover else '') + f'<div class="txt">{intro}{body_html(n.get("body"))}</div>' + gallery([u for u in g if u != cover])
+        crumbs = [('Пресс-центр', '/news/')] + ([(CATS[n['cat']], f'/news/{n["cat"]}/')] if n['cat'] in CATS else [])
+        inner(path_of(n['url']), n['title'], crumbs, content, desc=n.get('desc') or n.get('intro') or strip_tags(n.get('body'))[:180], active='/news/')
+
+
+def build_events():
+    events = D['events']
+    up = sorted([e for e in events if e['upcoming']], key=lambda e: e.get('date') or '9')
+    past = [e for e in events if e['local'] and not e['upcoming'] and (e.get('date') or '') <= TODAY]
+    items = up + past
+    per = 25
+    pages = max(1, (len(items) + per - 1) // per)
+    for i in range(pages):
+        path = '/events/' if i == 0 else f'/events/page-{i + 1}/'
+        content = search_panel() + '<div class="rows">' + ''.join(ev_row(e) for e in items[i * per:(i + 1) * per]) + '</div>' + pager('/events/', i, pages)
+        if i == pages - 1:
+            content += f'<p class="note" style="margin-top:24px">Мероприятия до {dfmt(EVENTS_FROM)} в <a href="{ORIG}/events/?archive=y" target="_blank" rel="noopener" style="color:var(--blue)">архиве текущего сайта</a>.</p>'
+        inner(path, 'Мероприятия', [('Мероприятия', None)], content, aside=wg_news(), desc='Анонсы и прошедшие мероприятия Пермского отделения «Деловой России».', active='/events/')
+    for e in events:
+        if not e['local']:
+            continue
+        g = e.get('gallery') or []
+        when = esc(e.get('date_text') or '') + (f' {e["date"][:4]}' if e.get('date') else '')
+        act = ''
+        if e['upcoming']:
+            act = f'<div class="btns" style="margin-top:32px"><a class="btn" href="{L("/organization/how-to-join/")}">{"Вступить в организацию" if e["closed"] else "Подать заявку на участие"}</a></div>'
+        content = f'<div class="meta"><span>{when}</span></div>' + (f'<div class="cover"><img src="{img(g[0], 1200)}" alt=""></div>' if g else '') + \
+            f'<div class="txt">{body_html(e.get("body"))}</div>' + gallery(g[1:]) + act
+        inner(path_of(e['url']), e['title'], [('Мероприятия', '/events/')], content, desc=e.get('desc') or strip_tags(e.get('body'))[:180], active='/events/')
+
+
+def build_search():
+    idx = [[n['title'], n.get('date') or '', nhref(n), 0 if n['local'] else 1, CATS.get(n['cat'], '')] for n in D['news']]
+    idx += [[e['title'], e.get('date') or '', L(path_of(e['url'])), 0, 'Мероприятия'] for e in D['events'] if e['local']]
+    idx += [[p['title'], '', L(f'/projects/{p["id"]}/'), 0, 'Проекты'] for p in D['projects']]
+    idx += [[p['name'] + ', ' + (p.get('role') or ''), '', L(path_of(p['url'])), 0, 'Лица'] for p in D['team']]
+    for sec, lbl in (('commissions', 'Комитеты'), ('clubs', 'Клубы'), ('boards', 'Советы')):
+        idx += [[it['title'], '', L(path_of(it['url'])), 0, lbl] for it in D['sections'][sec] if is_own(it['url'])]
+    json.dump(idx, open(os.path.join(OUT, 'assets', 'search.json'), 'w', encoding='utf-8'), ensure_ascii=False, separators=(',', ':'))
+    inner('/search/', 'Поиск по сайту', [('Поиск', None)], search_panel() + '<p class="note" data-sinfo></p><div class="rows" data-results></div>', desc='Поиск по сайту.')
+
+
+# ---------------- лица ----------------
+def grp_of(p):
+    r = (p.get('role') or '').lower()
+    if r.startswith('председатель отделения') or r.startswith('сопредседатель'):
+        return 'rukovodstvo'
+    if 'директор' in r or 'менеджер' in r or 'руководитель проектов' in r:
+        return 'direkciya'
+    if 'регионального совета' in r or 'почетный' in r:
+        return 'sovet'
+    if 'лидер комитета' in r:
+        return 'lidery'
+    return 'chleny'
+
+
+def build_team():
+    team = D['team']
+    boxes = ''
+    for t, h, k in TEAM_GROUPS:
+        n = len([p for p in team if grp_of(p) == k])
+        boxes += f'<a class="box" href="{L(h)}">{t}<small>{n} {plural(n, "человек", "человека", "человек")}</small></a>'
+    boxes += f'<a class="box" href="{L("/organization/experts/")}">Эксперты</a>'
+    inner('/organization/team/', 'Лица Пермского отделения', [('Лица', None)], f'<div class="boxes">{boxes}</div>',
+          aside=wg_news('Слово председателя', news_about(['Теплов', 'Протопопов'])) + wg_events(), desc='Руководство, дирекция, региональный совет и члены Пермского отделения «Деловой России».', active='/organization/team/')
+    for t, h, k in TEAM_GROUPS:
+        ps = [p for p in team if grp_of(p) == k]
+        inner(h, t, [('Лица', '/organization/team/'), (t, None)], f'<div class="people">{"".join(person(p) for p in ps)}</div>',
+              aside=wm(TEAM_MENU, h) + wg_news(), desc=f'{t} Пермского отделения «Деловой России».', active='/organization/team/')
+    for p in team:
+        ph = p.get('photo_big') or p.get('photo')
+        bio = re.sub(r'[\w.+-]+@[\w-]+\.[\w.]+', '', body_html(p.get('bio')))
+        g = [x for x in TEAM_GROUPS if x[2] == grp_of(p)][0]
+        content = f'<div class="prof"><div>{pic_tag(ph, 640, p["name"])}</div><div><div class="role">{esc(p.get("role") or "Член «Деловой России»")}</div><div class="txt">{bio}</div></div></div>'
+        inner(path_of(p['url']), p['name'], [('Лица', '/organization/team/'), (g[0], g[1])], content,
+              aside=wm(TEAM_MENU, g[1]) + wg_news(), desc=p.get('desc') or f'{p["name"]}, {p.get("role", "")}', active='/organization/team/')
+
+
+# ---------------- комитеты, клубы, советы, партнеры ----------------
+SEC_META = {'commissions': ('Комитеты', 'Лидер', 'factory', ['комитет']),
+            'clubs': ('Клубы', 'Лидер', 'coffee', ['клуб']),
+            'boards': ('Советы и рабочие группы', 'Представитель отделения', 'scale', ['совет', 'рабоч'])}
+
+
+def build_sections():
+    for sec, (title, who, ic, words) in SEC_META.items():
+        items = [it for it in D['sections'][sec] if is_own(it['url']) and path_of(it['url']).startswith(f'/{sec}/') and path_of(it['url']) != f'/{sec}/']
+        rows = ''
+        for it in items:
+            it['_body'], it['_slugs'] = split_team(it.get('body') or '')
+            lead = next((D['team_by_slug'][s]['name'] for s in it['_slugs'] if s in D['team_by_slug']), '')
+            rows += f'<a class="row ic" href="{L(path_of(it["url"]))}"><div class="i">{icon(ic)}</div><div><b>{esc(it["title"])}</b>{f"<small>{who}: {esc(lead)}</small>" if lead else ""}</div></a>'
+        aside = wg_news(f'Новости: {title.lower()}', news_about(words)) + wg_events()
+        inner(f'/{sec}/', title, [(title, None)], f'<div class="rows">{rows}</div>', aside=aside, desc=f'{title} Пермского отделения «Деловой России».', active=f'/{sec}/')
+        for it in items:
+            content = f'<div class="txt">{body_html(it["_body"])}</div>' + gallery(it.get('gallery') or []) + people_block(it['_slugs'], 'Представители отделения' if sec == 'boards' else who)
+            inner(path_of(it['url']), it['title'], [(title, f'/{sec}/')], content, aside=aside, desc=it.get('desc') or strip_tags(it['_body'])[:180], active=f'/{sec}/')
+    rows = ''
+    for it in D['sections']['organization/partners']:
+        h, t = partner_href(it)
+        rows += f'<a class="row" href="{h}"{t}><div class="im" style="display:flex;align-items:center;justify-content:center;background:#fff">{pic_tag(it.get("img"), 320, "", " style=object-fit:contain;max-height:72px")}</div><div><b>{esc(it["title"])}</b></div></a>'
+        if not t:
+            inner(path_of(it['url']), it['title'], [('О нас', '/organization/about/'), ('Партнеры', '/organization/partners/')], f'<div class="txt">{body_html(it.get("body"))}</div>' + gallery(it.get('gallery') or []),
+                  aside=wm(ABOUT_MENU, '/organization/partners/') + wg_news(), desc=it.get('desc') or it['title'], active='/organization/about/')
+    inner('/organization/partners/', 'Партнеры', [('О нас', '/organization/about/'), ('Партнеры', None)], f'<div class="rows">{rows}</div>',
+          aside=wm(ABOUT_MENU, '/organization/partners/') + wg_news(), desc='Партнеры Пермского отделения «Деловой России».', active='/organization/about/')
+
+
+# ---------------- проекты ----------------
+def build_projects():
+    projects = D['projects']
+
+    def tile(p):
+        return f'<a class="tile" href="{L("/projects/" + p["id"] + "/")}"><b>{esc(p["title"])}</b><span class="hc">{pic_tag(p.get("img"), 480) or icon("rocket")}</span></a>'
+    act, arc = [p for p in projects if p['active']], [p for p in projects if not p['active']]
+    content = f'<div class="tiles">{"".join(tile(p) for p in act)}</div><h2 class="h2s">Завершенные проекты</h2><div class="tiles">{"".join(tile(p) for p in arc)}</div>'
+    aside = wg_news('Новости проектов', news_about(['проект', 'альянс', 'экспортер', 'инвест'])) + wg_events()
+    inner('/projects/', 'Проекты', [('Проекты', None)], content, aside=aside, desc='Проекты Пермского отделения «Деловой России».', active='/projects/')
+    for p in projects:
+        body, slugs = split_team(p.get('body') or '')
+        kv = f'<dl class="kv"><dt>Статус</dt><dd>{"<span class=status>Действующий проект</span>" if p["active"] else "<span class=status arch>Завершен</span>"}</dd></dl>'
+        btn = f'<div class="btns" style="margin-top:32px"><a class="btn" href="{L("/organization/how-to-join/")}">Участвовать в проекте</a></div>' if p['active'] else ''
+        content = kv + f'<div class="txt">{body_html(body)}</div>' + gallery(p.get('gallery') or []) + people_block(slugs, 'Участники проекта') + btn
+        inner(f'/projects/{p["id"]}/', p['title'], [('Проекты', '/projects/')], content, aside=aside, desc=p.get('desc') or strip_tags(body)[:180], active='/projects/')
+
+
+# ---------------- возможности ----------------
+PREMIUM_DROP = r'кальян|саун|частных самол|вертол|элит|миллионер|яхт|квадроцикл|экстрим'
+
+
+def svc_title(s):
+    return tidy(re.sub(r'Член\s+Деловой России/', '', s)).strip()
+
+
+def price_of(k):
+    return {'/services/package-of-documents/chlen-delovoy-rossii/': '100 000 ₽ в год', '/services/package-of-documents/chlen-delovoy-rossii-paket-premium/': '190 000 ₽ в год'}.get(k, '')
+
+
+def build_services():
+    pages = D['pages']
+    menu = [(t, h) for h, t, _ in SERVICE_GROUPS]
+    tiles = ''.join(f'<a class="tile" href="{L(h)}"><b>{t}</b><span class="hc">{icon(ic)}</span></a>' for h, t, ic in SERVICE_GROUPS)
+    inner('/services/', 'Возможности', [('Возможности', None)], f'<div class="tiles">{tiles}</div>', aside=wm(menu, None) + wg_news(), desc='Возможности для членов Пермского отделения «Деловой России».', active='/services/')
+    for k, v in pages.items():
+        if not k.startswith('/services/') or k == '/services/' or '?' in k:
+            continue
+        grp = next(((h, t) for h, t, _ in SERVICE_GROUPS if k.startswith(h)), ('/services/', 'Возможности'))
+        kids = [(kk, vv) for kk, vv in pages.items() if kk.startswith(k) and kk != k and '?' not in kk and kk.count('/') == k.count('/') + 1]
+        if kids:
+            content = '<div class="rows">' + ''.join(f'<a class="row ic" href="{L(kk)}"><div class="i">{icon("file")}</div><div><b>{esc(svc_title(vv["title"]))}</b>{f"<small>{price_of(kk)}</small>" if price_of(kk) else ""}</div></a>' for kk, vv in kids) + '</div>'
+        else:
+            b = body_html(v.get('body'))
+            if k.endswith('/chlen-delovoy-rossii-paket-premium/'):
+                b = re.sub(r'<li>(?:(?!</li>).)*?(' + PREMIUM_DROP + r')(?:(?!</li>).)*</li>', '', b, flags=re.I | re.S)
+            pr = price_of(k)
+            content = (f'<p style="font-size:22px;font-weight:700;color:var(--blue)">{pr}</p>' if pr else '') + f'<div class="txt">{b}</div>'
+            if '/package-of-documents/' in k:
+                content += f'<div class="btns" style="margin-top:32px"><a class="btn" href="{L("/organization/how-to-join/")}">Вступить в организацию</a><a class="btn ghost" href="#pay" data-pay>Оплатить взнос</a></div>'
+        crumbs = [('Возможности', '/services/')] + ([(grp[1], grp[0])] if grp[0] != k else [])
+        inner(k, svc_title(v['title']), crumbs, content, aside=wm(menu, grp[0]) + wg_news(), desc=v.get('desc') or strip_tags(v.get('body'))[:180], active='/services/')
+
+
+# ---------------- о нас ----------------
+def doc_link(href, title, kind):
+    return f'<a class="doc" href="{esc(href)}" target="_blank" rel="noopener"><span class="i">{icon("file")}</span><span>{title}</span><small>{kind}</small></a>'
+
+
+def build_about():
+    pages = D['pages']
+    for k in ['/organization/about/', '/organization/perm-region/', '/organization/requisites/']:
+        v = pages[k]
+        b = re.sub(r'<p>\s*Контакты\s*</p>\s*$', '', body_html(v['body']))
+        crumbs = [('О нас', None)] if k == '/organization/about/' else [('О нас', '/organization/about/'), (v['title'], None)]
+        inner(k, v['title'], crumbs, f'<div class="txt">{b}</div>', aside=wm(ABOUT_MENU, k) + wg_news(), desc=v.get('desc') or strip_tags(v['body'])[:180], active='/organization/about/')
+    v = pages['/organization/experts/']
+    inner('/organization/experts/', 'Эксперты', [('Лица', '/organization/team/'), ('Эксперты', None)], f'<div class="txt">{body_html(v["body"])}</div>',
+          aside=wm(TEAM_MENU, '/organization/experts/') + wg_news(), desc='Эксперты Пермского отделения «Деловой России».', active='/organization/team/')
+    # документы
+    b = body_html(pages['/organization/docs/']['body'])
+    b = re.sub(r'<p>\s*<a href="([^"]+)"[^>]*>\s*([^<]+?)\s*</a>\s*([\d.,]+\s*[КМ]б)?\s*</p>', lambda m: doc_link(html.unescape(m.group(1)), m.group(2), (m.group(3) or '').strip()), b)
+    content = f'''<h2 class="h2s" style="margin-top:0">Вступление</h2><div class="docs">{doc_link(DOC_JOIN, 'Пакет документов на вступление', 'DOCX')}{doc_link(DOC_POL, 'Положение о членстве от 27.01.2025', 'PDF')}{doc_link(DOC_USTAV, 'Устав отделения от 03.09.2019', 'PDF')}</div>
+<div class="txt">{b}</div>'''
+    inner('/organization/docs/', 'Документы', [('О нас', '/organization/about/'), ('Документы', None)], content, aside=wm(ABOUT_MENU, '/organization/docs/') + wg_news(), desc='Документы Пермского отделения «Деловой России».', active='/organization/about/')
+    # контакты
+    content = f'''<div class="ct"><div><small>Адрес</small><b>{ADDR}</b></div><div><small>Режим работы</small><b>Пн–пт 9:00–18:00, сб–вс выходной</b></div>
+<div><small>Телефон</small><b><a href="{PHONE_HREF}">{PHONE}</a></b></div><div><small>E-mail</small><b><a href="mailto:{EMAIL}">{EMAIL}</a></b></div></div>
+<div class="map"><iframe title="Карта" loading="lazy" src="https://yandex.ru/map-widget/v1/?text={esc('Пермь, улица Революции, 20')}&amp;z=16"></iframe></div>
+<h2 class="h2s">Написать сообщение</h2>
+<form class="fm" data-form><label>Имя<input name="name" required autocomplete="name"></label><label>Телефон<input name="phone" type="tel" required autocomplete="tel"></label>
+<label class="full">Сообщение<textarea name="msg" required></textarea></label>
+<label class="chk full"><input type="checkbox" required> <span>Согласен на обработку персональных данных по <a href="{L('/privacy/')}" style="color:var(--blue)">политике</a></span></label>
+<div class="full"><button class="btn">Отправить</button></div></form>'''
+    inner('/contacts/', 'Контакты', [('О нас', '/organization/about/'), ('Контакты', None)], content, aside=wm(ABOUT_MENU, '/contacts/') + wg_news(), desc=f'{ADDR}, {PHONE}, {EMAIL}', active='/contacts/')
+    v = pages.get('/include/licenses_detail.php')
+    if v:
+        inner('/privacy/', 'Политика обработки персональных данных', [('Политика обработки персональных данных', None)], f'<div class="txt">{body_html(v["body"])}</div>', desc='Политика обработки персональных данных.')
+    build_join()
+
+
+def build_join():
+    b = body_html(D['pages']['/organization/how-to-join/']['body'])
+    b = re.sub(r'<p>(?:(?!</p>).)*(Заполнить анкету|\(скачать\))(?:(?!</p>).)*</p>', '', b, flags=re.S)
+    b = re.sub(r'<table>(?:(?!</table>).)*Заполнить анкету(?:(?!</table>).)*</table>', '', b, flags=re.S)
+    b = re.split(r'<p>\s*Пакет документов на вступление', b)[0]
+
+    def first(k):
+        v = D['pages'].get(k)
+        if not v:
+            return ''
+        t = strip_tags(clean_body(v.get('body', '')))
+        return t if len(t) < 220 else t[:220].rsplit(' ', 1)[0] + '…'
+    base_u, prem_u = '/services/package-of-documents/chlen-delovoy-rossii/', '/services/package-of-documents/chlen-delovoy-rossii-paket-premium/'
+    nxt = icon('right')
+    content = f'''<div data-join>
+<div class="stp"><div class="on" data-st="1"><span>Информация о членстве</span><i>1</i></div><div data-st="2"><span>Пакеты членства</span><i>2</i></div><div data-st="3"><span>Личная информация</span><i>3</i></div></div>
+<div class="step on" data-step="1"><span class="stl">Шаг 1 из 3</span><h2 class="h2s" style="margin-top:0">Информация о членстве</h2><div class="txt">{b}</div>
+<div class="docs">{doc_link(DOC_JOIN, 'Пакет документов на вступление', 'DOCX')}{doc_link(DOC_USTAV, 'Устав организации', 'PDF')}{doc_link(DOC_POL, 'Положение о членстве', 'PDF')}</div>
+<label class="chk"><input type="checkbox" data-agree> С информацией ознакомлен</label><button class="btn" data-go="2" disabled>К выбору пакета членства {nxt}</button></div>
+<div class="step" data-step="2"><span class="stl">Шаг 2 из 3</span><h2 class="h2s" style="margin-top:0">Пакеты членства</h2>
+<div class="pk"><label class="pkc"><input type="radio" name="pkg" value="Базовый" checked><b>«Базовый»</b><div class="pr2">100 000 ₽ <small>в год</small></div><p>{esc(first(base_u))}</p><a href="{L(base_u)}" target="_blank">Подробнее о пакете</a></label>
+<label class="pkc"><input type="radio" name="pkg" value="Премиум"><b>«Премиум»</b><div class="pr2">190 000 ₽ <small>в год</small></div><p>{esc(first(prem_u))}</p><a href="{L(prem_u)}" target="_blank">Подробнее о пакете</a></label></div>
+<div class="btns"><button class="btn ghost" data-go="1">Назад</button><button class="btn" data-go="3">Далее {nxt}</button></div></div>
+<div class="step" data-step="3"><span class="stl">Шаг 3 из 3</span><h2 class="h2s" style="margin-top:0">Личная информация</h2>
+<form class="fm" data-form><input type="hidden" name="package"><input type="hidden" name="source">
+<label>Фамилия и имя<input name="name" required autocomplete="name"></label><label>Телефон<input name="phone" type="tel" required autocomplete="tel"></label>
+<label>Компания<input name="company" required autocomplete="organization"></label><label>Должность<input name="position" autocomplete="organization-title"></label>
+<label class="full">E-mail<input name="email" type="email" autocomplete="email"></label>
+<label class="chk full"><input type="checkbox" required> <span>Согласен на обработку персональных данных по <a href="{L('/privacy/')}" style="color:var(--blue)">политике</a></span></label>
+<div class="full btns"><button type="button" class="btn ghost" data-go="2">Назад</button><button class="btn">Отправить заявку</button></div></form></div>
+</div>'''
+    inner('/organization/how-to-join/', 'Вступить в «Деловую Россию»', [('О нас', '/organization/about/'), ('Вступить в «Деловую Россию»', None)], content,
+          desc='Условия членства, пакеты и заявка на вступление в Пермское отделение «Деловой России».', active='/organization/about/')
+    redirect('/organization/kak-vstupit/', '/organization/how-to-join/')
+
+
+def redirect(frm, to):
+    f = os.path.join(OUT, frm.lstrip('/'), 'index.html')
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    open(f, 'w').write(f'<!doctype html><meta charset="utf-8"><meta name="robots" content="noindex"><meta http-equiv="refresh" content="0;url={L(to)}"><a href="{L(to)}">{L(to)}</a>')
+
+
+def register():
+    """Какие адреса будут в макете, чтобы ссылки в старых текстах вели на него."""
+    g = GENERATED
+    g.update({'/', '/news/', '/events/', '/search/', '/organization/team/', '/organization/experts/', '/projects/', '/services/', '/contacts/', '/privacy/',
+              '/organization/about/', '/organization/perm-region/', '/organization/requisites/', '/organization/docs/', '/organization/partners/', '/organization/how-to-join/',
+              '/commissions/', '/clubs/', '/boards/'})
+    g.update(f'/news/{k}/' for k in CATS)
+    g.update(h for _, h, _ in TEAM_GROUPS)
+    g.update(path_of(n['url']) for n in D['news'] if n['local'])
+    g.update(path_of(e['url']) for e in D['events'] if e['local'])
+    g.update(path_of(p['url']) for p in D['team'])
+    g.update(f'/projects/{p["id"]}/' for p in D['projects'])
+    for sec in ('commissions', 'clubs', 'boards', 'organization/partners'):
+        g.update(path_of(it['url']) for it in D['sections'][sec] if is_own(it['url']) and path_of(it['url']).startswith(f'/{sec}/'))
+    g.update(k for k in D['pages'] if k.startswith('/services/') and '?' not in k)
 
 
 def main():
@@ -927,52 +806,31 @@ def main():
         shutil.rmtree(OUT)
     os.makedirs(OUT)
     shutil.copytree(os.path.join(HERE, 'assets'), os.path.join(OUT, 'assets'))
-    news, events, team, sections, pages, projects = load()
-    if '/include/licenses_detail.php' in pages:
-        GENERATED.add('/include/licenses_detail.php')
-    NAV = build_nav(projects)
-    # 1) какие страницы будут — чтобы ссылки внутри старого контента вели на макет
-    build_projects(projects)
-    local_news = build_news(news)
-    local_events = build_events(events)
-    build_team(team)
-    TEAM_BY_SLUG.update({p['url'].rstrip('/').split('/')[-1]: p for p in team})
-    build_lists(sections)
-    build_services(pages)
-    build_static_pages(pages)
-    LINK_MAP['/include/licenses_detail.php'] = '/privacy/'
-    GENERATED.update({'/', '/services/'})
-    # 2) рендер
-    stats = compute_stats(news, events, team, projects, sections)
-    build_home(news, events, team, projects, stats)
-    render_news_details(local_news, news)
-    render_events(local_events, events)
-    render_team(team)
-    render_projects(projects)
-    render_lists(sections)
-    render_services(pages)
-    render_static(pages, team)
+    load()
+    NAV = build_nav()
+    register()
+    build_home(); build_news(); build_events(); build_search(); build_team(); build_sections()
+    build_projects(); build_services(); build_about()
     for frm, to in [('/meropriyatiya/', '/events/'), ('/organization/', '/organization/about/'), ('/include/licenses_detail.php/', '/privacy/'),
                     ('/services/obshchie-uslugi/finansovyy-ekonomicheskiy-audit/', '/services/common-services/finansovyy-ekonomicheskiy-audit/'),
                     ('/services/package-of-documents/predsedatel-regionalnogo-otdeleniya/', '/services/package-of-documents/')]:
         redirect(frm, to)
-    layout('/404.html', 'Страница не найдена', page_head('Страница не найдена', 'Возможно, адрес изменился после обновления сайта.') + f'<div class="wrap" style="padding-bottom:80px;display:flex;gap:16px;flex-wrap:wrap"><a class="btn btn-primary" href="{L("/")}">На главную</a><a class="btn btn-line" href="{L("/events/")}">Мероприятия</a><a class="btn btn-line" href="{L("/organization/how-to-join/")}">Вступить</a></div>')
+    inner('/404.html', 'Страница не найдена', [('Страница не найдена', None)], f'<p>Возможно, адрес изменился. <a href="{L("/")}" style="color:var(--blue)">На главную</a></p>')
     open(os.path.join(OUT, 'robots.txt'), 'w').write('User-agent: *\nDisallow: /\n')
     open(os.path.join(OUT, '.nojekyll'), 'w').write('')
     bad = run_images()
-    if bad:  # убрать битые картинки из разметки
+    if bad:
+        alt = '|'.join(re.escape(b) for b in bad)
         for root, _, files in os.walk(OUT):
             for fn in files:
                 if fn.endswith('.html'):
                     fp = os.path.join(root, fn)
                     t = open(fp, encoding='utf-8').read()
-                    alt = '|'.join(re.escape(b) for b in bad)
                     t2 = re.sub(r'<a href="[^"]*/img/(' + alt + r')"[^>]*>.*?</a>', '', t)
                     t2 = re.sub(r'<img src="[^"]*/img/(' + alt + r')"[^>]*>', '', t2)
                     if t2 != t:
                         open(fp, 'w', encoding='utf-8').write(t2)
-    n = sum(len([f for f in fs if f.endswith('.html')]) for _, _, fs in os.walk(OUT))
-    print(f'страниц: {n}')
+    print('страниц:', sum(len([f for f in fs if f.endswith('.html')]) for _, _, fs in os.walk(OUT)))
 
 
 if __name__ == '__main__':
