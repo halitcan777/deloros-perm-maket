@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ = os.path.dirname(HERE)
 DATA = os.path.join(PROJ, 'data')
-OUT = os.path.join(PROJ, 'site')
+OUT = os.environ.get('OUT') or os.path.join(PROJ, 'site')
 MIR = os.path.join(PROJ, '_сырьё', 'mirror')
 IMGCACHE = os.path.join(PROJ, '_сырьё', 'imgcache')
 ORIG = 'https://deloros-perm.ru'
