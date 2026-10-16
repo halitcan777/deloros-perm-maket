@@ -1,0 +1,6 @@
+_сырьё/
+site/
+data/
+__pycache__/
+.playwright-mcp/
+.DS_Store
