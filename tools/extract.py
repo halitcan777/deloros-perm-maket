@@ -356,8 +356,20 @@ def menu_tree():
     return walk(side) if side else []
 
 
+def banners():
+    """Слайды баннера с главной deloros-perm.ru: картинка 1600×550, подпись, ссылка."""
+    h = open(os.path.join(MIR, 'index.html'), encoding='utf-8', errors='ignore').read()
+    out = []
+    for m in re.finditer(r'<li class="box[^"]*" id="bx_\d+_\d+"[^>]*url\(\'([^\']+)\'\)(.*?)</li>', h, re.S):
+        t = re.search(r'class="title">([^<]*)<', m.group(2))
+        a = re.search(r'class="target" href="([^"]*)"', m.group(2))
+        out.append({'img': m.group(1), 'title': html.unescape(t.group(1).strip()) if t else '', 'href': a.group(1) if a else ''})
+    return out
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    json.dump(banners(), open(f'{OUT}/banners.json', 'w'), ensure_ascii=False, indent=1)
     lm = sitemap_lastmod()
     json.dump(lm, open(f'{OUT}/lastmod.json', 'w'), ensure_ascii=False, indent=0)
 

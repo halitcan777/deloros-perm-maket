@@ -59,6 +59,34 @@
     });
   });
 
+  // лица: поиск по ФИО и алфавит
+  $$('[data-pfind]').forEach(function (w) {
+    var q = $('input', w), letter = '';
+    var cards = $$('.person', w.parentNode);
+    var apply = function () {
+      var t = q.value.trim().toLowerCase();
+      cards.forEach(function (c) {
+        var n = (c.dataset.name || '').toLowerCase();
+        var last = n.split(' ').pop();
+        c.classList.toggle('hide', (t && n.indexOf(t) < 0) || (letter && last.charAt(0) !== letter.toLowerCase()));
+      });
+      $$('.people', w.parentNode).forEach(function (g) {
+        var vis = $$('.person', g).some(function (c) { return !c.classList.contains('hide'); });
+        g.classList.toggle('hide', !vis);
+        var h = g.previousElementSibling;
+        if (h && h.tagName === 'H2' && !h.nextElementSibling.matches('[data-pfind]')) h.classList.toggle('hide', !vis);
+      });
+    };
+    q.addEventListener('input', apply);
+    $$('[data-l]', w).forEach(function (b) {
+      b.addEventListener('click', function () {
+        letter = b.dataset.l;
+        $$('[data-l]', w).forEach(function (x) { x.classList.toggle('on', x === b); });
+        apply();
+      });
+    });
+  });
+
   // вступление: 3 шага
   var j = $('[data-join]');
   if (j) {
