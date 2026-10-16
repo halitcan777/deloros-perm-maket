@@ -416,6 +416,14 @@ def footer():
  <div class="pay"><a href="{PAY_SBER}" target="_blank" rel="noopener"><span>Банковской картой<small>Платежная страница ПАО Сбербанк</small></span>{icon('right')}</a>
  <a href="{PAY_CKASSA}" target="_blank" rel="noopener"><span>Через «Центральную кассу»<small>Поставщик «Деловая Россия», Пермский край</small></span>{icon('right')}</a></div>
  <p class="note" style="margin-top:16px">Оплата по счету: напишите на <a href="mailto:{EMAIL}" style="color:var(--blue)">{EMAIL}</a>.</p></div></div>
+<div class="modal" id="lead" role="dialog" aria-modal="true" aria-labelledby="lead-h"><div class="bx"><button class="x" data-close aria-label="Закрыть">×</button>
+ <h3 id="lead-h" data-lead-title>Заявка</h3><p class="note" data-lead-note></p>
+ <form class="fm" data-form><input type="hidden" name="topic"><input type="hidden" name="source">
+ <label>Имя<input name="name" required autocomplete="name"></label><label>Телефон<input name="phone" type="tel" required autocomplete="tel"></label>
+ <label class="full">Компания<input name="company" autocomplete="organization"></label>
+ <label class="full">Сообщение<textarea name="msg"></textarea></label>
+ <label class="chk full"><input type="checkbox" required> <span>Согласен на обработку персональных данных по <a href="{L('/privacy/')}" style="color:var(--blue)">политике</a></span></label>
+ <div class="full"><button class="btn">Отправить</button></div></form></div></div>
 <div class="modal" id="thanks" role="dialog" aria-modal="true"><div class="bx"><button class="x" data-close aria-label="Закрыть">×</button><h3>Спасибо за отправленную заявку!</h3><p class="note">Исполнительная дирекция отделения свяжется с вами по указанному телефону.</p></div></div>'''
 
 
@@ -624,7 +632,8 @@ def build_home():
             ('Получить льготное финансирование', 'Наши члены уже получили льготы на сумму более 1 млрд рублей', L('/services/common-services/finansovyy-ekonomicheskiy-audit/'), 'banknote'),
             ('Заказать мероприятие', 'Команда профессионалов ПК РО «Деловая Россия» организует и проведет Ваше мероприятие «под ключ»', L('/contacts/?topic=event'), 'calendar'),
             ('Сервисы', 'Использовать возможности «Деловой России»', L('/services/'), 'briefcase')]
-    ac = ''.join(f'<a class="act{" main" if i == 0 else ""}" href="{h}"><span class="i">{icon(ic)}</span><b>{t}</b><span>{d}</span></a>' for i, (t, d, h, ic) in enumerate(acts))
+    lead = lambda h: f' data-lead="{h.split("topic=")[1]}"' if 'topic=' in h else ''
+    ac = ''.join(f'<a class="act{" main" if i == 0 else ""}" href="{h}"{lead(h)}><span class="i">{icon(ic)}</span><b>{t}</b><span>{d}</span></a>' for i, (t, d, h, ic) in enumerate(acts))
     act_sec = f'<section class="sec" style="padding-top:0"><div class="c"><div class="acts">{ac}</div></div></section>'
     # книга «Предприниматели и меценаты Прикамья» (проект 154): фото, описание проекта, новости #КнигаДеловойРоссии
     bk = pr.get('154')
@@ -798,7 +807,7 @@ def build_team():
         bio = re.sub(r'[\w.+-]+@[\w-]+\.[\w.]+', '', body_html(p.get('bio')))
         g = [x for x in TEAM_GROUPS if x[2] == grp_of(p)][0]
         content = f'<div class="prof"><div>{pic_tag(ph, 640, p["name"])}</div><div><div class="role">{esc(p.get("role") or "Член «Деловой России»")}</div><div class="txt">{bio}</div>' + \
-            f'<a class="btn" href="{L("/contacts/?topic=coop&to=" + quote(p["name"]))}">Предложить сотрудничество</a></div></div>' + page_news(p['url'])
+            f'<a class="btn" href="{L("/contacts/?topic=coop&to=" + quote(p["name"]))}" data-lead="coop" data-to="{esc(p["name"])}">Предложить сотрудничество</a></div></div>' + page_news(p['url'])
         inner(path_of(p['url']), p['name'], [('Лица', '/organization/team/'), (g[0], g[1])], content,
               aside=wm(TEAM_MENU, g[1]) + wg_news(), desc=p.get('desc') or f'{p["name"]}, {p.get("role", "")}', active='/organization/team/')
 
@@ -852,7 +861,7 @@ def build_projects():
     projects = D['projects']
 
     def tile(p):
-        return f'<a class="tile" href="{L("/projects/" + p["id"] + "/")}"><b>{esc(p["title"])}</b><span class="hc">{icon(PROJECT_ICONS.get(p["id"], "rocket"))}</span></a>'
+        return f'<a class="tile" href="{L("/projects/" + p["id"] + "/")}"><span class="hc"></span><b>{esc(p["title"])}</b><span class="ic">{icon(PROJECT_ICONS.get(p["id"], "rocket"))}</span></a>'
     act, arc = [p for p in projects if p['active']], [p for p in projects if not p['active']]
     content = f'<div class="tiles">{"".join(tile(p) for p in act)}</div><h2 class="h2s">Завершенные проекты</h2><div class="tiles">{"".join(tile(p) for p in arc)}</div>'
     aside = wg_news('Новости проектов', news_about(['проект', 'альянс', 'экспортер', 'инвест'])) + wg_events()
@@ -881,7 +890,7 @@ def price_of(k):
 def build_services():
     pages = D['pages']
     menu = [(t, h) for h, t, _ in SERVICE_GROUPS]
-    tiles = ''.join(f'<a class="tile" href="{L(h)}"><b>{t}</b><span class="hc">{icon(ic)}</span></a>' for h, t, ic in SERVICE_GROUPS)
+    tiles = ''.join(f'<a class="tile" href="{L(h)}"><span class="hc"></span><b>{t}</b><span class="ic">{icon(ic)}</span></a>' for h, t, ic in SERVICE_GROUPS)
     inner('/services/', 'Возможности', [('Возможности', None)], f'<div class="tiles">{tiles}</div>', aside=wm(menu, None) + wg_news(), desc='Возможности для членов Пермского отделения «Деловой России».', active='/services/')
     for k, v in pages.items():
         if not k.startswith('/services/') or k == '/services/' or '?' in k:

@@ -96,8 +96,29 @@
     tp.value = q[1];
     var to = location.search.match(/[?&]to=([^&]+)/), ta = $('textarea[name=msg]');
     if (to && ta) ta.value = 'Хочу предложить сотрудничество: ' + decodeURIComponent(to[1].replace(/\+/g, ' ')) + '\n\n';
-    setTimeout(function () { $('#msg').scrollIntoView({ block: 'start' }); }, 50);
   }
+
+  // заявка из плитки или карточки участника: окно на месте, без перехода и прокрутки страницы
+  var LEAD = {  // подписи — тексты плиток с главной deloros-perm.ru
+    project: ['Предложить свой инвестиционный проект', 'Участвовать в проектной деятельности «Деловой России»'],
+    partner: ['Стать партнером', 'Узнать, как развивать бизнес быстро, просто и выгодно'],
+    announce: ['Подать анонс', 'Сообщить об участии в мероприятии'],
+    event: ['Заказать мероприятие', 'Команда профессионалов ПК РО «Деловая Россия» организует и проведет Ваше мероприятие «под ключ»'],
+    coop: ['Предложить сотрудничество', '']
+  };
+  $$('[data-lead]').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      var k = a.dataset.lead, m = document.getElementById('lead');
+      if (!m || !LEAD[k]) return;
+      e.preventDefault();
+      $('[data-lead-title]', m).textContent = LEAD[k][0];
+      $('[data-lead-note]', m).textContent = LEAD[k][1];
+      $('input[name=topic]', m).value = LEAD[k][0] + (a.dataset.to ? ': ' + a.dataset.to : '');
+      $('textarea', m).value = a.dataset.to ? 'Хочу предложить сотрудничество: ' + a.dataset.to + '\n\n' : '';
+      openM('lead');
+      setTimeout(function () { $('input[name=name]', m).focus({ preventScroll: true }); }, 50);
+    });
+  });
 
   // лица: поиск по ФИО и алфавит
   $$('[data-pfind]').forEach(function (w) {
@@ -155,7 +176,7 @@
         if (empty && !bad) bad = el;
       });
       if (bad) { bad.focus(); return; }
-      fm.reset(); openM('thanks');
+      fm.reset(); var lm = fm.closest('.modal'); if (lm) lm.classList.remove('open'); openM('thanks');
     });
   });
 

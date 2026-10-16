@@ -267,11 +267,18 @@ button{font:inherit;cursor:pointer}
 /* плитки разделов */
 .tiles{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .tile{position:relative;height:200px;background:var(--soft);border-radius:var(--r);overflow:hidden;display:flex;align-items:center;padding:24px;padding-right:46%}
-.tile b{font-size:20px;font-weight:600;line-height:1.3;position:relative;z-index:1}
+.tile b{font-size:20px;font-weight:600;line-height:1.3;position:relative;z-index:1;overflow-wrap:break-word;hyphens:auto;min-width:0}
 .tile small{display:block;font-size:13px;font-weight:500;color:var(--muted);margin-top:8px}
-.tile .hc{position:absolute;right:0;top:0;bottom:0;width:42%;background:var(--blue);border-radius:50% 0 0 50% / 50% 0 0 50%;display:flex;align-items:center;justify-content:center;color:#fff;overflow:hidden}
-.tile .hc svg{width:56px;height:56px;stroke-width:1.5}
-.tile:hover b{color:var(--blue)}
+/* синий полукруг при наведении разъезжается на всю плитку и возвращается */
+.tile .hc{position:absolute;right:0;top:0;bottom:0;width:42%;background:var(--blue);border-radius:50% 0 0 50% / 50% 0 0 50%;
+  transition:width .5s cubic-bezier(.65,0,.35,1),border-radius .5s cubic-bezier(.65,0,.35,1)}
+.tile .ic{position:absolute;right:0;top:0;bottom:0;width:42%;display:flex;align-items:center;justify-content:center;color:#fff;z-index:1;pointer-events:none}
+.tile .ic svg{width:56px;height:56px;stroke-width:1.5;transition:transform .5s cubic-bezier(.65,0,.35,1)}
+.tile b{transition:color .2s 0s}
+.tile:hover .hc,.tile:focus-visible .hc{width:100%;border-radius:0}
+.tile:hover b,.tile:focus-visible b{color:#fff;transition-delay:.24s}
+.tile:hover .ic svg{transform:scale(1.08)}
+@media (prefers-reduced-motion:reduce){.tile .hc,.tile .ic svg,.tile b{transition:none}}
 
 /* люди */
 .people{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
@@ -392,7 +399,8 @@ button{font:inherit;cursor:pointer}
 .fm textarea{height:112px;padding:12px 16px;resize:vertical}
 .fm input:focus,.fm textarea:focus{outline:2px solid var(--tint);border-color:var(--blue)}
 .fm [aria-invalid=true]{border-color:var(--red)}
-.fm .chk{margin:8px 0;font-weight:400}
+.fm .chk{margin:8px 0;font-weight:400;flex-direction:row;align-items:flex-start;gap:12px;line-height:1.45}
+.fm .chk input{width:20px;height:20px;padding:0;flex:none;margin-top:1px}
 .btns{display:flex;gap:16px;flex-wrap:wrap}
 
 /* контакты */
